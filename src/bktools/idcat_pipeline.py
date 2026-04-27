@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -124,8 +125,23 @@ def pipeline_yaml(
     raise ValueError(f"unknown pipeline variant: {variant}")
 
 
+def upload_pipeline(yaml: str) -> None:
+    logger.info("uploading pipeline with buildkite-agent pipeline upload")
+    subprocess.run(
+        ["buildkite-agent", "pipeline", "upload"],
+        input=yaml,
+        text=True,
+        check=True,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Emit a Buildkite pipeline.")
+    parser.add_argument(
+        "--dump",
+        action="store_true",
+        help="Write generated pipeline YAML to stdout instead of uploading it with buildkite-agent.",
+    )
     parser.add_argument(
         "--repo-root",
         type=Path,
@@ -135,7 +151,11 @@ def main() -> None:
     args = parser.parse_args()
 
     logging.basicConfig(
-        format="%(message)s", level=logging.INFO, stream=sys.stderr, force=True
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        level=logging.INFO,
+        stream=sys.stderr,
+        force=True,
     )
     repo_root = (
         args.repo_root if args.repo_root is not None else git_toplevel(Path.cwd())
@@ -156,7 +176,12 @@ def main() -> None:
     else:
         logger.info("not building on main branch, not uploading")
 
-    sys.stdout.write(pipeline_yaml(tag, variant=variant, should_publish=should_publish))
+    yaml = pipeline_yaml(tag, variant=variant, should_publish=should_publish)
+    if args.dump:
+        sys.stdout.write(yaml)
+        return
+
+    upload_pipeline(yaml)
 
 
 if __name__ == "__main__":
