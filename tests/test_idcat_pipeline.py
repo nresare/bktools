@@ -1,4 +1,8 @@
-from bktools.idcat_pipeline import pipeline_yaml, uv_pipeline_yaml
+from pathlib import Path
+
+import pytest
+
+from bktools.idcat_pipeline import main, pipeline_yaml, read_variant, uv_pipeline_yaml
 
 
 def test_pipeline_yaml_without_publish_contains_test_step_only() -> None:
@@ -42,3 +46,35 @@ def test_pipeline_yaml_dispatches_to_uv_variant_without_tag() -> None:
     pipeline = pipeline_yaml(variant="uv")
 
     assert "uv run pytest" in pipeline
+
+
+def test_read_variant_loads_variant_from_config(tmp_path: Path) -> None:
+    config_path = tmp_path / "pipelinegen.toml"
+    config_path.write_text('variant = "uv"\n')
+
+    assert read_variant(config_path) == "uv"
+
+
+def test_read_variant_rejects_unknown_variant(tmp_path: Path) -> None:
+    config_path = tmp_path / "pipelinegen.toml"
+    config_path.write_text('variant = "ruby"\n')
+
+    with pytest.raises(SystemExit):
+        read_variant(config_path)
+
+
+def test_main_uses_config_variant_and_logs_publish_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_dir = tmp_path / ".buildkite"
+    config_dir.mkdir()
+    (config_dir / "pipelinegen.toml").write_text('variant = "uv"\n')
+    monkeypatch.setattr("sys.argv", ["pipelinegen", "--repo-root", str(tmp_path)])
+    monkeypatch.setenv("BUILDKITE_BRANCH", "main")
+
+    main()
+
+    captured = capsys.readouterr()
+    assert "uv run pytest" in captured.out
+    assert f"reading config from {config_dir / 'pipelinegen.toml'}" in captured.err
+    assert "building on main branch, uploading to nresare/python" in captured.err

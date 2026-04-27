@@ -1,13 +1,44 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
+import tomllib
 from pathlib import Path
 
 from bktools.image_version_hash import docker_image_tag, git_toplevel
 
 PipelineVariant = str
+VALID_VARIANTS = ("rust-container", "uv")
+PYTHON_PACKAGE_REGISTRY = "nresare/python"
+
+logger = logging.getLogger("pipelinegen")
+
+
+def read_variant(config_path: Path) -> PipelineVariant:
+    logger.info("reading config from %s", config_path)
+    try:
+        config = tomllib.loads(config_path.read_text())
+    except FileNotFoundError as error:
+        raise SystemExit(f"pipelinegen config not found: {config_path}") from error
+    except tomllib.TOMLDecodeError as error:
+        raise SystemExit(
+            f"failed to parse pipelinegen config {config_path}: {error}"
+        ) from error
+
+    variant = config.get("variant")
+    if not isinstance(variant, str):
+        raise SystemExit(
+            f"pipelinegen config {config_path} must contain string key 'variant'"
+        )
+    if variant not in VALID_VARIANTS:
+        valid_variants = ", ".join(VALID_VARIANTS)
+        raise SystemExit(
+            f"pipelinegen config {config_path} has unsupported variant {variant!r}; "
+            f"expected one of: {valid_variants}"
+        )
+    return variant
 
 
 def rust_container_pipeline_yaml(tag: str, should_publish: bool = False) -> str:
@@ -69,7 +100,7 @@ def uv_pipeline_yaml(should_publish: bool = False) -> str:
                 "    plugins:",
                 "      - publish-to-packages#v2.2.0:",
                 '          artifacts: "dist/*.whl"',
-                '          registry: "nresare/python"',
+                f'          registry: "{PYTHON_PACKAGE_REGISTRY}"',
             ]
         )
 
@@ -96,30 +127,36 @@ def pipeline_yaml(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Emit a Buildkite pipeline.")
     parser.add_argument(
-        "--variant",
-        choices=("rust-container", "uv"),
-        default="rust-container",
-        help="Pipeline variant to emit.",
-    )
-    parser.add_argument(
         "--repo-root",
         type=Path,
         default=None,
-        help="Repository root to hash. Defaults to the current git work tree.",
+        help="Repository root containing .buildkite/pipelinegen.toml. Defaults to the current git work tree.",
     )
     args = parser.parse_args()
 
+    logging.basicConfig(
+        format="%(message)s", level=logging.INFO, stream=sys.stderr, force=True
+    )
+    repo_root = (
+        args.repo_root if args.repo_root is not None else git_toplevel(Path.cwd())
+    )
+    variant = read_variant(repo_root / ".buildkite" / "pipelinegen.toml")
     should_publish = os.getenv("BUILDKITE_BRANCH") == "main"
     tag = None
-    if args.variant == "rust-container":
-        repo_root = (
-            args.repo_root if args.repo_root is not None else git_toplevel(Path.cwd())
-        )
+    upload_target = PYTHON_PACKAGE_REGISTRY
+    if variant == "rust-container":
         tag = docker_image_tag(repo_root)
+        upload_target = tag.split(":", 1)[0]
 
-    sys.stdout.write(
-        pipeline_yaml(tag, variant=args.variant, should_publish=should_publish)
-    )
+    branch = os.getenv("BUILDKITE_BRANCH", "")
+    if should_publish:
+        logger.info("building on main branch, uploading to %s", upload_target)
+    elif branch:
+        logger.info("building on %s branch, not uploading", branch)
+    else:
+        logger.info("not building on main branch, not uploading")
+
+    sys.stdout.write(pipeline_yaml(tag, variant=variant, should_publish=should_publish))
 
 
 if __name__ == "__main__":

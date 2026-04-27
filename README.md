@@ -16,10 +16,11 @@ uv run pytest
 
 ## Tools
 
-- `pipelinegen`: emit Buildkite pipeline YAML.
-  - `--variant rust-container`: Rust build/test plus a main-branch Docker publish
-    step.
-  - `--variant uv`: uv/ruff/pytest/build/ty checks plus a main-branch Python
+- `pipelinegen`: emit Buildkite pipeline YAML using the `variant` value from
+  `.buildkite/pipelinegen.toml`.
+  - `variant = "rust-container"`: Rust build/test plus a main-branch Docker
+    publish step.
+  - `variant = "uv"`: uv/ruff/pytest/build/ty checks plus a main-branch Python
     package publish step.
 - `bktools-image-version-hash`: hash a Docker build context and optionally emit a
   Docker tag using package metadata from `Cargo.toml`.
