@@ -1,0 +1,25 @@
+# Buildkite Tools
+
+Small Python tools intended to be invoked from Buildkite pipelines.
+
+## Development
+
+This project uses [uv](https://docs.astral.sh/uv/) for development. To set up the
+environment, run `uv sync`. Tests and checks can be run with:
+
+```bash
+uv run ruff check
+uv run ruff format --check
+uv run ty check
+uv run pytest
+```
+
+## Tools
+
+- `pipelinegen`: emit Buildkite pipeline YAML.
+  - `--variant rust-container`: Rust build/test plus a main-branch Docker publish
+    step.
+  - `--variant uv`: uv/ruff/pytest/build/ty checks plus a main-branch Python
+    package publish step.
+- `bktools-image-version-hash`: hash a Docker build context and optionally emit a
+  Docker tag using package metadata from `Cargo.toml`.

@@ -1,0 +1,35 @@
+[project]
+name = "bktools"
+dynamic = ["version"]
+description = "Buildkite-invoked helper tools"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+pipelinegen = "bktools.idcat_pipeline:main"
+bktools-image-version-hash = "bktools.image_version_hash:main"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "ruff",
+    "ty",
+]
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/bktools/_version.py"
+
+[tool.setuptools_scm]
+version_scheme = "guess-next-semver"
+local_scheme = "node-and-date"
+
+[tool.ruff]
+exclude = ["src/bktools/_version.py"]
