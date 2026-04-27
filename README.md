@@ -17,8 +17,9 @@ uv run pytest
 ## Tools
 
 - `pipelinegen`: generate Buildkite pipeline YAML from the `variant` value in
-  `.buildkite/pipelinegen.toml` and upload it with `buildkite-agent pipeline
-  upload`. Use `--dump` to write the generated YAML to stdout instead.
+  `.buildkite/pipelinegen.toml`, write it to `pipeline.yaml`, upload that file
+  as a Buildkite artifact, and upload it with `buildkite-agent pipeline upload`.
+  Use `--dump` to write the generated YAML to stdout instead.
   - `variant = "rust-container"`: Rust build/test plus a main-branch Docker
     publish step.
   - `variant = "uv"`: uv/ruff/pytest/build/ty checks plus a main-branch Python
