@@ -17,3 +17,6 @@ wheels/
 
 # Auto-generated version file
 src/bktools/_version.py
+
+# Generated pipeline artifact
+pipeline.yaml

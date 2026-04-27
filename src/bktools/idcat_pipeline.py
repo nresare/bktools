@@ -125,6 +125,25 @@ def pipeline_yaml(
     raise ValueError(f"unknown pipeline variant: {variant}")
 
 
+PIPELINE_ARTIFACT = "pipeline.yaml"
+
+
+def write_pipeline_artifact(repo_root: Path, yaml: str) -> Path:
+    artifact_path = repo_root / PIPELINE_ARTIFACT
+    logger.info("writing generated pipeline to %s", artifact_path)
+    artifact_path.write_text(yaml)
+    return artifact_path
+
+
+def upload_pipeline_artifact(repo_root: Path) -> None:
+    logger.info("uploading pipeline artifact %s", PIPELINE_ARTIFACT)
+    subprocess.run(
+        ["buildkite-agent", "artifact", "upload", PIPELINE_ARTIFACT],
+        cwd=repo_root,
+        check=True,
+    )
+
+
 def upload_pipeline(yaml: str) -> None:
     logger.info("uploading pipeline with buildkite-agent pipeline upload")
     subprocess.run(
@@ -181,6 +200,8 @@ def main() -> None:
         sys.stdout.write(yaml)
         return
 
+    write_pipeline_artifact(repo_root, yaml)
+    upload_pipeline_artifact(repo_root)
     upload_pipeline(yaml)
 
 

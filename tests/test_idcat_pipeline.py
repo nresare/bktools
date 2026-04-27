@@ -8,8 +8,10 @@ from bktools.idcat_pipeline import (
     main,
     pipeline_yaml,
     read_variant,
+    upload_pipeline_artifact,
     upload_pipeline,
     uv_pipeline_yaml,
+    write_pipeline_artifact,
 )
 
 
@@ -113,6 +115,33 @@ def test_upload_pipeline_invokes_buildkite_agent(
     ]
 
 
+def test_write_pipeline_artifact_writes_pipeline_yaml(tmp_path: Path) -> None:
+    artifact_path = write_pipeline_artifact(tmp_path, "steps: []\n")
+
+    assert artifact_path == tmp_path / "pipeline.yaml"
+    assert artifact_path.read_text() == "steps: []\n"
+
+
+def test_upload_pipeline_artifact_invokes_buildkite_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = []
+
+    def fake_run(
+        args: list[str], *, cwd: Path, check: bool
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append((args, cwd, check))
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    upload_pipeline_artifact(tmp_path)
+
+    assert calls == [
+        (["buildkite-agent", "artifact", "upload", "pipeline.yaml"], tmp_path, True)
+    ]
+
+
 def test_main_uploads_by_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -120,8 +149,12 @@ def test_main_uploads_by_default(
     config_dir.mkdir()
     (config_dir / "pipelinegen.toml").write_text('variant = "uv"\n')
     uploaded = []
+    uploaded_artifacts = []
     monkeypatch.setattr("sys.argv", ["pipelinegen", "--repo-root", str(tmp_path)])
     monkeypatch.setattr("bktools.idcat_pipeline.upload_pipeline", uploaded.append)
+    monkeypatch.setattr(
+        "bktools.idcat_pipeline.upload_pipeline_artifact", uploaded_artifacts.append
+    )
 
     main()
 
@@ -129,3 +162,20 @@ def test_main_uploads_by_default(
     assert captured.out == ""
     assert len(uploaded) == 1
     assert "uv run pytest" in uploaded[0]
+    assert uploaded_artifacts == [tmp_path]
+    assert (tmp_path / "pipeline.yaml").read_text() == uploaded[0]
+
+
+def test_dump_does_not_write_pipeline_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = tmp_path / ".buildkite"
+    config_dir.mkdir()
+    (config_dir / "pipelinegen.toml").write_text('variant = "uv"\n')
+    monkeypatch.setattr(
+        "sys.argv", ["pipelinegen", "--dump", "--repo-root", str(tmp_path)]
+    )
+
+    main()
+
+    assert not (tmp_path / "pipeline.yaml").exists()
