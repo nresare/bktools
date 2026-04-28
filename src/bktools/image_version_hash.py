@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import re
 import subprocess
 import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+
+
+SEMVER_TAG = re.compile(r"^v([1-9][0-9]*)\.([1-9][0-9]*)\.([1-9][0-9]*)$")
 
 
 @dataclass(frozen=True)
@@ -186,8 +190,12 @@ def build_directory_hashes(repo_root: Path, files: list[str]) -> dict[str, str]:
     return {**file_hashes, **directory_hashes}
 
 
-def cargo_package_metadata(repo_root: Path) -> tuple[str, str]:
-    cargo_toml = tomllib.loads((repo_root / "Cargo.toml").read_text())
+def cargo_package_metadata(repo_root: Path) -> tuple[str, str] | None:
+    cargo_toml_path = repo_root / "Cargo.toml"
+    if not cargo_toml_path.exists():
+        return None
+
+    cargo_toml = tomllib.loads(cargo_toml_path.read_text())
     package = cargo_toml.get("package", {})
     name = package.get("name")
     version = package.get("version")
@@ -198,6 +206,65 @@ def cargo_package_metadata(repo_root: Path) -> tuple[str, str]:
     return name, version
 
 
+def pyproject_package_name(repo_root: Path) -> str | None:
+    pyproject_path = repo_root / "pyproject.toml"
+    if not pyproject_path.exists():
+        return None
+
+    pyproject = tomllib.loads(pyproject_path.read_text())
+    project = pyproject.get("project", {})
+    name = project.get("name")
+    if isinstance(name, str):
+        return name
+    return None
+
+
+def nearest_version_tag(repo_root: Path) -> str | None:
+    try:
+        tags = run_git("tag", "--merged", "HEAD", "--list", "v*.*.*", cwd=repo_root)
+    except subprocess.CalledProcessError:
+        return None
+
+    candidates = []
+    for tag in tags.splitlines():
+        match = SEMVER_TAG.fullmatch(tag)
+        if match is None:
+            continue
+        distance = int(run_git("rev-list", "--count", f"{tag}..HEAD", cwd=repo_root))
+        candidates.append((distance, tag))
+
+    if not candidates:
+        return None
+
+    _, tag = min(candidates)
+    return tag.removeprefix("v")
+
+
+def package_name(repo_root: Path) -> str:
+    metadata = cargo_package_metadata(repo_root)
+    if metadata is not None:
+        name, _ = metadata
+        return name
+
+    return pyproject_package_name(repo_root) or repo_root.name
+
+
+def base_version(repo_root: Path) -> str:
+    metadata = cargo_package_metadata(repo_root)
+    if metadata is not None:
+        _, version = metadata
+        return version
+
+    version = nearest_version_tag(repo_root)
+    if version is not None:
+        return version
+
+    raise SystemExit(
+        "could not determine base version for Docker image tag: expected either "
+        "Cargo.toml with [package].version or a reachable git tag matching vX.Y.Z"
+    )
+
+
 def docker_context_hash(repo_root: Path) -> str:
     dockerignore = DockerIgnore(repo_root)
     files = collect_files(repo_root, dockerignore)
@@ -206,8 +273,7 @@ def docker_context_hash(repo_root: Path) -> str:
 
 
 def docker_image_tag(repo_root: Path) -> str:
-    package_name, package_version = cargo_package_metadata(repo_root)
-    return f"{package_name}:{package_version}-{docker_context_hash(repo_root)}"
+    return f"{package_name(repo_root)}:{base_version(repo_root)}-{docker_context_hash(repo_root)}"
 
 
 def main() -> int:
@@ -222,7 +288,7 @@ def main() -> int:
     parser.add_argument(
         "--tag",
         action="store_true",
-        help="Print a Docker tag in the form <package-name>:<package-version>-<hash> using Cargo.toml.",
+        help="Print a Docker tag in the form <package-name>:<base-version>-<hash>.",
     )
     parser.add_argument(
         "--repo-root",

@@ -1,6 +1,30 @@
+import subprocess
 from pathlib import Path
 
 from bktools.image_version_hash import docker_image_tag
+import pytest
+
+
+def run_git(repo_root: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=repo_root, check=True)
+
+
+def commit_all(repo_root: Path, message: str) -> None:
+    subprocess.run(["git", "add", "."], cwd=repo_root, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            message,
+        ],
+        cwd=repo_root,
+        check=True,
+    )
 
 
 def test_docker_image_tag_uses_cargo_metadata_and_context_hash(tmp_path: Path) -> None:
@@ -15,3 +39,35 @@ def test_docker_image_tag_uses_cargo_metadata_and_context_hash(tmp_path: Path) -
 
     assert tag.startswith("idcat:0.1.0-")
     assert len(tag.removeprefix("idcat:0.1.0-")) == 8
+
+
+def test_docker_image_tag_uses_nearest_version_tag_without_cargo(
+    tmp_path: Path,
+) -> None:
+    run_git(tmp_path, "init")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "havtorn"\n')
+    (tmp_path / "Dockerfile").write_text("FROM scratch\n")
+    commit_all(tmp_path, "initial")
+    run_git(tmp_path, "tag", "v1.2.3")
+    run_git(tmp_path, "tag", "not-a-version")
+
+    (tmp_path / "app.py").write_text("print('hello')\n")
+    commit_all(tmp_path, "add app")
+    run_git(tmp_path, "tag", "v1.3.1")
+
+    (tmp_path / "README.md").write_text("# test\n")
+    commit_all(tmp_path, "add readme")
+
+    tag = docker_image_tag(tmp_path)
+
+    assert tag.startswith("havtorn:1.3.1-")
+    assert len(tag.removeprefix("havtorn:1.3.1-")) == 8
+
+
+def test_docker_image_tag_fails_descriptively_without_version_source(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "Dockerfile").write_text("FROM scratch\n")
+
+    with pytest.raises(SystemExit, match="could not determine base version"):
+        docker_image_tag(tmp_path)
