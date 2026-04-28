@@ -3,7 +3,11 @@ from pathlib import Path
 
 import pytest
 
-from bktools.image_version_hash import docker_image_tag, version_from_tag
+from bktools.image_version_hash import (
+    docker_context_hash,
+    docker_image_tag,
+    version_from_tag,
+)
 
 
 def run_git(repo_root: Path, *args: str) -> None:
@@ -60,6 +64,34 @@ def test_docker_image_tag_uses_cargo_metadata_and_context_hash(tmp_path: Path) -
 
     assert tag.startswith("idcat:0.1.0-")
     assert len(tag.removeprefix("idcat:0.1.0-")) == 8
+
+
+def test_docker_context_hash_ignores_dockerignore_file_contents(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "Dockerfile").write_text("FROM scratch\n")
+    (tmp_path / "app.py").write_text("print('hello')\n")
+    (tmp_path / ".dockerignore").write_text("ignored.txt\n")
+    (tmp_path / "ignored.txt").write_text("ignored\n")
+
+    original_hash = docker_context_hash(tmp_path)
+
+    (tmp_path / ".dockerignore").write_text("# comment changed\nignored.txt\n")
+
+    assert docker_context_hash(tmp_path) == original_hash
+
+
+def test_docker_context_hash_changes_when_docker_build_input_changes(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "Dockerfile").write_text("FROM scratch\n")
+    (tmp_path / "app.py").write_text("print('hello')\n")
+
+    original_hash = docker_context_hash(tmp_path)
+
+    (tmp_path / "app.py").write_text("print('goodbye')\n")
+
+    assert docker_context_hash(tmp_path) != original_hash
 
 
 def test_docker_image_tag_uses_nearest_version_tag_without_cargo(
