@@ -1,8 +1,9 @@
 import subprocess
 from pathlib import Path
 
-from bktools.image_version_hash import docker_image_tag
 import pytest
+
+from bktools.image_version_hash import docker_image_tag, version_from_tag
 
 
 def run_git(repo_root: Path, *args: str) -> None:
@@ -25,6 +26,26 @@ def commit_all(repo_root: Path, message: str) -> None:
         cwd=repo_root,
         check=True,
     )
+
+
+@pytest.mark.parametrize(
+    ("tag", "version"),
+    [
+        ("v0.1.0", "0.1.0"),
+        ("v1.2.3", "1.2.3"),
+        ("v10.20.30", "10.20.30"),
+        ("0.1.0", None),
+        ("vv0.1.0", None),
+        ("v0.1", None),
+        ("v0.1.0.0", None),
+        ("v0.1.x", None),
+        ("v01.2.3", None),
+    ],
+)
+def test_version_from_tag_parses_v_prefixed_semver_tags(
+    tag: str, version: str | None
+) -> None:
+    assert version_from_tag(tag) == version
 
 
 def test_docker_image_tag_uses_cargo_metadata_and_context_hash(tmp_path: Path) -> None:

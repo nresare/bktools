@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-SEMVER_TAG = re.compile(r"^v([1-9][0-9]*)\.([1-9][0-9]*)\.([1-9][0-9]*)$")
+SEMVER_TAG = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 
 
 @dataclass(frozen=True)
@@ -219,6 +219,14 @@ def pyproject_package_name(repo_root: Path) -> str | None:
     return None
 
 
+def version_from_tag(tag: str) -> str | None:
+    match = SEMVER_TAG.fullmatch(tag)
+    if match is None:
+        return None
+
+    return tag.removeprefix("v")
+
+
 def nearest_version_tag(repo_root: Path) -> str | None:
     try:
         tags = run_git("tag", "--merged", "HEAD", "--list", "v*.*.*", cwd=repo_root)
@@ -227,17 +235,17 @@ def nearest_version_tag(repo_root: Path) -> str | None:
 
     candidates = []
     for tag in tags.splitlines():
-        match = SEMVER_TAG.fullmatch(tag)
-        if match is None:
+        version = version_from_tag(tag)
+        if version is None:
             continue
         distance = int(run_git("rev-list", "--count", f"{tag}..HEAD", cwd=repo_root))
-        candidates.append((distance, tag))
+        candidates.append((distance, version))
 
     if not candidates:
         return None
 
-    _, tag = min(candidates)
-    return tag.removeprefix("v")
+    _, version = min(candidates)
+    return version
 
 
 def package_name(repo_root: Path) -> str:
