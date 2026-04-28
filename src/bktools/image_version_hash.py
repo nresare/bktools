@@ -133,6 +133,8 @@ def collect_files(repo_root: Path, dockerignore: DockerIgnore) -> list[str]:
             relative_path = child.relative_to(repo_root).as_posix()
             if relative_path == ".git" or relative_path.startswith(".git/"):
                 continue
+            if relative_path == ".dockerignore":
+                continue
             if dockerignore.is_ignored(relative_path, child.is_dir()):
                 continue
             if child.is_dir():
