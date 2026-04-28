@@ -16,13 +16,16 @@ uv run pytest
 
 ## Tools
 
-- `pipelinegen`: generate Buildkite pipeline YAML from the `variant` value in
-  `.buildkite/pipelinegen.toml`, write it to `pipeline.yaml`, upload that file
-  as a Buildkite artifact, and upload it with `buildkite-agent pipeline upload`.
-  Use `--dump` to write the generated YAML to stdout instead.
-  - `variant = "rust-container"`: Rust build/test plus a main-branch Docker
-    publish step.
+- `pipelinegen`: generate Buildkite pipeline YAML from `.buildkite/pipelinegen.toml`,
+  write it to `pipeline.yaml`, upload that file as a Buildkite artifact, and
+  upload it with `buildkite-agent pipeline upload`. Use `--dump` to write the
+  generated YAML to stdout instead.
+  - `variant = "rust"`: Rust build/test.
   - `variant = "uv"`: uv/ruff/pytest/build/ty checks plus a main-branch Python
     package publish step.
+  - `output = "container"`: add a main-branch Docker publish step using
+    `docker buildx build` and `docker-image-push`.
+  - `variant = "rust-container"` is deprecated. Use `variant = "rust"` with
+    `output = "container"` instead.
 - `bktools-image-version-hash`: hash a Docker build context and optionally emit a
   Docker tag using package metadata from `Cargo.toml`.

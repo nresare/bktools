@@ -6,18 +6,27 @@ import os
 import subprocess
 import sys
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 
 from bktools.image_version_hash import docker_image_tag, git_toplevel
 
 PipelineVariant = str
-VALID_VARIANTS = ("rust-container", "uv")
+PipelineOutput = str | None
+VALID_VARIANTS = ("rust", "uv", "rust-container")
+VALID_OUTPUTS = ("container",)
 PYTHON_PACKAGE_REGISTRY = "nresare/python"
 
 logger = logging.getLogger("pipelinegen")
 
 
-def read_variant(config_path: Path) -> PipelineVariant:
+@dataclass(frozen=True)
+class PipelineConfig:
+    variant: PipelineVariant
+    output: PipelineOutput = None
+
+
+def read_config(config_path: Path) -> PipelineConfig:
     logger.info("reading config from %s", config_path)
     try:
         config = tomllib.loads(config_path.read_text())
@@ -39,10 +48,57 @@ def read_variant(config_path: Path) -> PipelineVariant:
             f"pipelinegen config {config_path} has unsupported variant {variant!r}; "
             f"expected one of: {valid_variants}"
         )
-    return variant
+
+    output = config.get("output")
+    if output is not None and not isinstance(output, str):
+        raise SystemExit(
+            f"pipelinegen config {config_path} key 'output' must be a string"
+        )
+    if output is not None and output not in VALID_OUTPUTS:
+        valid_outputs = ", ".join(VALID_OUTPUTS)
+        raise SystemExit(
+            f"pipelinegen config {config_path} has unsupported output {output!r}; "
+            f"expected one of: {valid_outputs}"
+        )
+
+    if variant == "rust-container":
+        logger.warning(
+            "pipelinegen config variant 'rust-container' is deprecated; "
+            "use variant = 'rust' and output = 'container' instead"
+        )
+        return PipelineConfig(variant="rust", output="container")
+
+    return PipelineConfig(variant=variant, output=output)
 
 
-def rust_container_pipeline_yaml(tag: str, should_publish: bool = False) -> str:
+def read_variant(config_path: Path) -> PipelineVariant:
+    return read_config(config_path).variant
+
+
+def docker_image_publish_step(tag: str, depends_on: str) -> list[str]:
+    image_name, image_tag = tag.split(":", 1)
+    return [
+        "  - label: ':whale: build docker image'",
+        f"    depends_on: {depends_on}",
+        "    agents:",
+        "      arch: arm64",
+        f"    command: docker buildx build -t {tag} .",
+        "    plugins:",
+        "      - docker-image-push#v1.1.0:",
+        "          buildkite:",
+        "            auth-method: oidc",
+        f"          image: {image_name}",
+        "          provider: buildkite",
+        f"          tag: {image_tag}",
+    ]
+
+
+def rust_pipeline_yaml(
+    tag: str | None = None,
+    *,
+    output: PipelineOutput = None,
+    should_publish: bool = False,
+) -> str:
     lines = [
         "steps:",
         "  - label: ':rust: rust build and test'",
@@ -55,30 +111,16 @@ def rust_container_pipeline_yaml(tag: str, should_publish: bool = False) -> str:
         "    key: test",
     ]
 
-    if should_publish:
-        image_name, image_tag = tag.split(":", 1)
-        lines.extend(
-            [
-                "  - label: ':whale: build docker image'",
-                "    depends_on: test",
-                "    agents:",
-                "      arch: arm64",
-                f"    command: docker buildx build -t {tag} .",
-                "    plugins:",
-                "      - docker-image-push#v1.1.0:",
-                "          buildkite:",
-                "            auth-method: oidc",
-                f"          image: {image_name}",
-                "          provider: buildkite",
-                f"          tag: {image_tag}",
-            ]
-        )
+    if output == "container" and should_publish:
+        if tag is None:
+            raise ValueError("tag is required for container output")
+        lines.extend(docker_image_publish_step(tag, "test"))
 
     return "\n".join(lines) + "\n"
 
 
-def uv_pipeline_yaml(should_publish: bool = False) -> str:
-    lines = [
+def uv_test_and_build_step() -> list[str]:
+    return [
         "steps:",
         '  - label: ":test_tube: Test and Build"',
         "    key: test-and-build",
@@ -93,7 +135,20 @@ def uv_pipeline_yaml(should_publish: bool = False) -> str:
         '      - "dist/*.whl"',
     ]
 
-    if should_publish:
+
+def uv_pipeline_yaml(
+    tag: str | None = None,
+    *,
+    output: PipelineOutput = None,
+    should_publish: bool = False,
+) -> str:
+    lines = uv_test_and_build_step()
+
+    if output == "container" and should_publish:
+        if tag is None:
+            raise ValueError("tag is required for container output")
+        lines.extend(docker_image_publish_step(tag, "test-and-build"))
+    elif should_publish:
         lines.extend(
             [
                 "  - label: Publish",
@@ -111,16 +166,19 @@ def uv_pipeline_yaml(should_publish: bool = False) -> str:
 def pipeline_yaml(
     tag: str | None = None,
     *,
-    variant: PipelineVariant = "rust-container",
+    variant: PipelineVariant = "rust",
+    output: PipelineOutput = None,
     should_publish: bool = False,
 ) -> str:
     if variant == "rust-container":
-        if tag is None:
-            raise ValueError("tag is required for the rust-container pipeline variant")
-        return rust_container_pipeline_yaml(tag, should_publish)
+        variant = "rust"
+        output = "container"
+
+    if variant == "rust":
+        return rust_pipeline_yaml(tag, output=output, should_publish=should_publish)
 
     if variant == "uv":
-        return uv_pipeline_yaml(should_publish)
+        return uv_pipeline_yaml(tag, output=output, should_publish=should_publish)
 
     raise ValueError(f"unknown pipeline variant: {variant}")
 
@@ -179,11 +237,11 @@ def main() -> None:
     repo_root = (
         args.repo_root if args.repo_root is not None else git_toplevel(Path.cwd())
     )
-    variant = read_variant(repo_root / ".buildkite" / "pipelinegen.toml")
+    config = read_config(repo_root / ".buildkite" / "pipelinegen.toml")
     should_publish = os.getenv("BUILDKITE_BRANCH") == "main"
     tag = None
     upload_target = PYTHON_PACKAGE_REGISTRY
-    if variant == "rust-container":
+    if config.output == "container":
         tag = docker_image_tag(repo_root)
         upload_target = tag.split(":", 1)[0]
 
@@ -195,7 +253,12 @@ def main() -> None:
     else:
         logger.info("not building on main branch, not uploading")
 
-    yaml = pipeline_yaml(tag, variant=variant, should_publish=should_publish)
+    yaml = pipeline_yaml(
+        tag,
+        variant=config.variant,
+        output=config.output,
+        should_publish=should_publish,
+    )
     if args.dump:
         sys.stdout.write(yaml)
         return
