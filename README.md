@@ -28,4 +28,5 @@ uv run pytest
   - `variant = "rust-container"` is deprecated. Use `variant = "rust"` with
     `output = "container"` instead.
 - `bktools-image-version-hash`: hash a Docker build context and optionally emit a
-  Docker tag using package metadata from `Cargo.toml`.
+  Docker tag. The base version comes from `Cargo.toml` when present, otherwise
+  from the nearest reachable `vX.Y.Z` git tag.
