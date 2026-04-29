@@ -4,7 +4,9 @@ dynamic = ["version"]
 description = "Buildkite-invoked helper tools"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "manifest-builder>=0.4.0",
+]
 
 [project.scripts]
 pipelinegen = "bktools.idcat_pipeline:main"
@@ -30,6 +32,10 @@ version-file = "src/bktools/_version.py"
 [tool.setuptools_scm]
 version_scheme = "guess-next-semver"
 local_scheme = "node-and-date"
+
+[[tool.uv.index]]
+name = "buildkite-nresare-python"
+url = "https://packages.buildkite.com/nresare/python/pypi/simple"
 
 [tool.ruff]
 exclude = ["src/bktools/_version.py"]
