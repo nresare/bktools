@@ -6,6 +6,7 @@ import pytest
 
 from bktools.idcat_pipeline import (
     PipelineConfig,
+    diffcomment_pipeline_yaml,
     main,
     pipeline_yaml,
     read_config,
@@ -104,6 +105,32 @@ def test_pipeline_yaml_dispatches_to_uv_variant_without_tag() -> None:
     assert "uv run pytest" in pipeline
 
 
+def test_diffcomment_pipeline_yaml_posts_manifest_diff_comment() -> None:
+    pipeline = diffcomment_pipeline_yaml()
+
+    assert "label: ':memo: manifest diff comment'" in pipeline
+    assert "from manifest_builder.cli import main as manifest_builder_main" in pipeline
+    assert 'manifest_builder_main(args=["--diff"], standalone_mode=False)' in pipeline
+    assert '["manifest-builder", "--diff"]' not in pipeline
+    assert 'AUDIENCE = "idcat.noa.re"' in pipeline
+    assert 'IDCAT_BASE_URL = "https://idcat.noa.re/proxy"' in pipeline
+    assert 'buildkite-agent", "oidc", "request-token"' in pipeline
+    assert "BUILDKITE_PULL_REQUEST" in pipeline
+    assert "No diff output produced." in pipeline
+    assert "urllib.request.Request" in pipeline
+    assert (
+        "/nresare-buildsystem/repos/{owner}/{repo}/issues/{pr_number}/comments"
+        in pipeline
+    )
+
+
+def test_pipeline_yaml_dispatches_to_diffcomment_variant() -> None:
+    pipeline = pipeline_yaml(variant="diffcomment")
+
+    assert "manifest diff comment" in pipeline
+    assert "manifest_builder_main" in pipeline
+
+
 def test_pipeline_yaml_requires_tag_for_container_output() -> None:
     with pytest.raises(ValueError, match="container output"):
         pipeline_yaml(variant="uv", output="container", should_publish=True)
@@ -114,6 +141,13 @@ def test_read_config_loads_variant_and_output_from_config(tmp_path: Path) -> Non
     config_path.write_text('variant = "uv"\noutput = "container"\n')
 
     assert read_config(config_path) == PipelineConfig(variant="uv", output="container")
+
+
+def test_read_config_accepts_diffcomment_variant(tmp_path: Path) -> None:
+    config_path = tmp_path / "pipelinegen.toml"
+    config_path.write_text('variant = "diffcomment"\n')
+
+    assert read_config(config_path) == PipelineConfig(variant="diffcomment")
 
 
 def test_read_variant_loads_variant_from_config(tmp_path: Path) -> None:
