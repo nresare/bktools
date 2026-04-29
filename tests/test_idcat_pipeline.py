@@ -108,27 +108,22 @@ def test_pipeline_yaml_dispatches_to_uv_variant_without_tag() -> None:
 def test_diffcomment_pipeline_yaml_posts_manifest_diff_comment() -> None:
     pipeline = diffcomment_pipeline_yaml()
 
-    assert "label: ':memo: manifest diff comment'" in pipeline
-    assert "from manifest_builder.cli import main as manifest_builder_main" in pipeline
-    assert 'manifest_builder_main(args=["--diff"], standalone_mode=False)' in pipeline
-    assert '["manifest-builder", "--diff"]' not in pipeline
-    assert 'AUDIENCE = "idcat.noa.re"' in pipeline
-    assert 'IDCAT_BASE_URL = "https://idcat.noa.re/proxy"' in pipeline
-    assert 'buildkite-agent", "oidc", "request-token"' in pipeline
-    assert "BUILDKITE_PULL_REQUEST" in pipeline
-    assert "No diff output produced." in pipeline
-    assert "urllib.request.Request" in pipeline
+    assert 'label: ":pipeline:"' in pipeline
+    assert "uv venv" in pipeline
+    assert "uv pip install --pre --upgrade bktools \\" in pipeline
     assert (
-        "/nresare-buildsystem/repos/{owner}/{repo}/issues/{pr_number}/comments"
+        '--extra-index-url="https://packages.buildkite.com/nresare/python/pypi/simple"'
         in pipeline
     )
+    assert "uv run diffcomment" in pipeline
+    assert "manifest_builder_main" not in pipeline
 
 
 def test_pipeline_yaml_dispatches_to_diffcomment_variant() -> None:
     pipeline = pipeline_yaml(variant="diffcomment")
 
-    assert "manifest diff comment" in pipeline
-    assert "manifest_builder_main" in pipeline
+    assert 'label: ":pipeline:"' in pipeline
+    assert "uv run diffcomment" in pipeline
 
 
 def test_pipeline_yaml_requires_tag_for_container_output() -> None:
