@@ -24,7 +24,8 @@ uv run pytest
   - `variant = "uv"`: uv/ruff/pytest/build/ty checks plus a main-branch Python
     package publish step.
   - `variant = "diffcomment"`: run `manifest-builder --diff` on pull request
-    builds and post the output as a GitHub PR comment through idcat.
+    builds through the `diffcomment` entrypoint and post the output as a GitHub
+    PR comment through idcat.
   - `output = "container"`: add a main-branch Docker publish step using
     `docker buildx build` and `docker-image-push`.
   - `variant = "rust-container"` is deprecated. Use `variant = "rust"` with
