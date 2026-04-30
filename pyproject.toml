@@ -35,8 +35,9 @@ version_scheme = "guess-next-semver"
 local_scheme = "node-and-date"
 
 [[tool.uv.index]]
-name = "buildkite-nresare-python"
-url = "https://packages.buildkite.com/nresare/python/pypi/simple"
+name = "repo.noa.re"
+url = "https://repo.noa.re"
+publish-url = "https://repo.noa.re/legacy"
 
 [tool.ruff]
 exclude = ["src/bktools/_version.py"]
