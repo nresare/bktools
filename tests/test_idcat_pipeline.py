@@ -111,10 +111,7 @@ def test_diffcomment_pipeline_yaml_posts_manifest_diff_comment() -> None:
     assert 'label: ":pipeline:"' in pipeline
     assert "uv venv" in pipeline
     assert "uv pip install --pre --upgrade bktools \\" in pipeline
-    assert (
-        '--extra-index-url="https://packages.buildkite.com/nresare/python/pypi/simple"'
-        in pipeline
-    )
+    assert '--extra-index-url="https://repo.noa.re"' in pipeline
     assert "uv run diffcomment" in pipeline
     assert "manifest_builder_main" not in pipeline
 

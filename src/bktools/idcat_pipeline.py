@@ -176,7 +176,7 @@ def diffcomment_pipeline_yaml(
         "    command: |",
         "      uv venv",
         "      uv pip install --pre --upgrade bktools \\",
-        '        --extra-index-url="https://packages.buildkite.com/nresare/python/pypi/simple"',
+        '        --extra-index-url="https://repo.noa.re"',
         "      uv run diffcomment",
     ]
     return "\n".join(lines) + "\n"
