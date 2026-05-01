@@ -134,7 +134,7 @@ def uv_test_and_build_step(publish: bool = False) -> list[str]:
     if publish:
         steps.extend(
             [
-                "      export UV_PUBLISH_TOKEN=$(buildkite-agent oidc request-token --audience repo.noa.re)",
+                "      export UV_PUBLISH_TOKEN=$$(buildkite-agent oidc request-token --audience repo.noa.re)",
                 "      uv publish --index repo.noa.re",
             ]
         )
