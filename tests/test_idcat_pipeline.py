@@ -63,7 +63,7 @@ def test_uv_pipeline_yaml_with_publish_adds_publish_commands() -> None:
     pipeline = uv_pipeline_yaml(should_publish=True)
 
     assert (
-        "export UV_PUBLISH_TOKEN=$(buildkite-agent oidc request-token --audience repo.noa.re)"
+        "export UV_PUBLISH_TOKEN=$$(buildkite-agent oidc request-token --audience repo.noa.re)"
         in pipeline
     )
     assert "uv publish --index repo.noa.re" in pipeline
