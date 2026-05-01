@@ -59,13 +59,15 @@ def test_uv_pipeline_yaml_without_publish_contains_test_and_build_step_only() ->
     assert "branches: main" not in pipeline
 
 
-def test_uv_pipeline_yaml_with_publish_adds_publish_step() -> None:
+def test_uv_pipeline_yaml_with_publish_adds_publish_commands() -> None:
     pipeline = uv_pipeline_yaml(should_publish=True)
 
-    assert "depends_on: test-and-build" in pipeline
-    assert "publish-to-packages#v2.2.0" in pipeline
-    assert 'artifacts: "dist/*.whl"' in pipeline
-    assert 'registry: "nresare/python"' in pipeline
+    assert (
+        "export UV_PUBLISH_TOKEN=$(buildkite-agent oidc request-token --audience repo.noa.re)"
+        in pipeline
+    )
+    assert "uv publish --index repo.noa.re" in pipeline
+    assert "publish-to-packages" not in pipeline
     assert "branches: main" not in pipeline
 
 
@@ -86,6 +88,7 @@ def test_uv_pipeline_with_container_output_uses_uv_steps_and_docker_publish() ->
     assert "docker-image-push#v1.1.0" in pipeline
     assert "image: idcat" in pipeline
     assert "tag: 0.1.0-deadbeef" in pipeline
+    assert "uv publish" not in pipeline
     assert "publish-to-packages" not in pipeline
 
 

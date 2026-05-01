@@ -11,7 +11,11 @@ from bktools.image_version_hash import (
 
 
 def run_git(repo_root: Path, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=repo_root, check=True)
+    subprocess.run(
+        ["git", "-c", "commit.gpgsign=false", "-c", "tag.gpgSign=false", *args],
+        cwd=repo_root,
+        check=True,
+    )
 
 
 def commit_all(repo_root: Path, message: str) -> None:
@@ -19,6 +23,8 @@ def commit_all(repo_root: Path, message: str) -> None:
     subprocess.run(
         [
             "git",
+            "-c",
+            "commit.gpgsign=false",
             "-c",
             "user.name=Test User",
             "-c",
