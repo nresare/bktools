@@ -119,8 +119,8 @@ def rust_pipeline_yaml(
     return "\n".join(lines) + "\n"
 
 
-def uv_test_and_build_step() -> list[str]:
-    return [
+def uv_test_and_build_step(publish: bool = False) -> list[str]:
+    steps = [
         "steps:",
         '  - label: ":test_tube: Test and Build"',
         "    key: test-and-build",
@@ -128,12 +128,17 @@ def uv_test_and_build_step() -> list[str]:
         "      uv run ruff check",
         "      uv run ruff format --check",
         "      uv run pytest",
-        "      # the wheel build needs to happen before the ty check on havtorn for some reason, to generate _version",
         "      uv build --wheel",
         "      uv run ty check",
-        "    artifact_paths:",
-        '      - "dist/*.whl"',
     ]
+    if publish:
+        steps.extend(
+            [
+                "      export UV_PUBLISH_TOKEN=$(buildkite-agent oidc request-token --audience repo.noa.re)",
+                "      uv publish --index repo.noa.re",
+            ]
+        )
+    return steps
 
 
 def uv_pipeline_yaml(
