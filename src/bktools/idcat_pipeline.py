@@ -147,24 +147,11 @@ def uv_pipeline_yaml(
     output: PipelineOutput = None,
     should_publish: bool = False,
 ) -> str:
-    lines = uv_test_and_build_step()
-
+    lines = uv_test_and_build_step(should_publish and output != "container")
     if output == "container" and should_publish:
         if tag is None:
             raise ValueError("tag is required for container output")
         lines.extend(docker_image_publish_step(tag, "test-and-build"))
-    elif should_publish:
-        lines.extend(
-            [
-                "  - label: Publish",
-                "    depends_on: test-and-build",
-                "    plugins:",
-                "      - publish-to-packages#v2.2.0:",
-                '          artifacts: "dist/*.whl"',
-                f'          registry: "{PYTHON_PACKAGE_REGISTRY}"',
-            ]
-        )
-
     return "\n".join(lines) + "\n"
 
 
