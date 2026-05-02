@@ -1,3 +1,5 @@
+import subprocess
+
 import pytest
 from pathlib import Path
 
@@ -223,6 +225,9 @@ def test_run_manifest_builder_diff_captures_git_diff(
     input_dir = tmp_path / "output"
     calls = []
 
+    def fake_add_all(output: Path) -> None:
+        calls.append(("add_all", output))
+
     def fake_diff_stat(output: Path) -> str:
         calls.append(("diff_stat", output))
         return "diff stat\n"
@@ -231,6 +236,7 @@ def test_run_manifest_builder_diff_captures_git_diff(
         calls.append(("diff", output))
         return "diff output\n"
 
+    monkeypatch.setattr(diffcomment, "git_add_all", fake_add_all)
     monkeypatch.setattr(diffcomment, "git_diff_stat", fake_diff_stat)
     monkeypatch.setattr(diffcomment, "git_diff", fake_diff)
 
@@ -239,9 +245,37 @@ def test_run_manifest_builder_diff_captures_git_diff(
         diffcomment.ManifestDiff(stat="diff stat\n", diff="diff output\n"),
     )
     assert calls == [
+        ("add_all", input_dir),
         ("diff_stat", input_dir),
         ("diff", input_dir),
     ]
+
+
+def test_run_manifest_builder_diff_includes_added_file_after_move(
+    tmp_path: Path,
+) -> None:
+    input_dir = tmp_path / "output"
+    input_dir.mkdir()
+
+    subprocess.run(["git", "init"], cwd=input_dir, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"], cwd=input_dir, check=True
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test User"], cwd=input_dir, check=True
+    )
+    (input_dir / "old.yaml").write_text("name: original\n")
+    subprocess.run(["git", "add", "."], cwd=input_dir, check=True)
+    subprocess.run(["git", "commit", "-m", "Initial"], cwd=input_dir, check=True)
+
+    (input_dir / "old.yaml").unlink()
+    (input_dir / "new.yaml").write_text("name: original\n")
+
+    _, manifest_diff = diffcomment.run_manifest_builder_diff(input_dir)
+
+    assert "old.yaml => new.yaml" in manifest_diff.stat
+    assert "rename from old.yaml" in manifest_diff.diff
+    assert "rename to new.yaml" in manifest_diff.diff
 
 
 def test_github_repo_parses_buildkite_repo(monkeypatch: pytest.MonkeyPatch) -> None:
