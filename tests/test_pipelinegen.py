@@ -3,6 +3,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 from bktools.pipelinegen import (
     DiffcommentConfig,
@@ -55,8 +56,9 @@ def test_rust_pipeline_with_container_output_adds_docker_push_step() -> None:
 
 def test_uv_pipeline_yaml_without_publish_contains_test_and_build_step_only() -> None:
     pipeline = uv_pipeline_yaml()
+    parsed = yaml.safe_load(pipeline)
 
-    assert 'label: ":test_tube: Test and Build"' in pipeline
+    assert parsed["steps"][0]["label"] == ":test_tube: Test and Build"
     assert "uv build --wheel" in pipeline
     assert "publish-to-packages" not in pipeline
     assert "branches: main" not in pipeline
@@ -115,8 +117,9 @@ def test_pipeline_yaml_dispatches_to_uv_variant_without_tag() -> None:
 
 def test_diffcomment_pipeline_yaml_posts_manifest_diff_comment() -> None:
     pipeline = diffcomment_pipeline_yaml()
+    parsed = yaml.safe_load(pipeline)
 
-    assert 'label: ":pipeline:"' in pipeline
+    assert parsed["steps"][0]["label"] == ":pipeline:"
     assert "uv venv" in pipeline
     assert "uv pip install --pre --upgrade bktools \\" in pipeline
     assert '--extra-index-url="https://repo.noa.re"' in pipeline
@@ -126,8 +129,9 @@ def test_diffcomment_pipeline_yaml_posts_manifest_diff_comment() -> None:
 
 def test_pipeline_yaml_dispatches_to_diffcomment_variant() -> None:
     pipeline = pipeline_yaml(variant="diffcomment")
+    parsed = yaml.safe_load(pipeline)
 
-    assert 'label: ":pipeline:"' in pipeline
+    assert parsed["steps"][0]["label"] == ":pipeline:"
     assert "uv run diffcomment" in pipeline
 
 

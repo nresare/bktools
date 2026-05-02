@@ -8,7 +8,9 @@ import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
+
+import yaml
 
 from bktools.image_version_hash import docker_image_tag, git_toplevel
 
@@ -19,6 +21,19 @@ VALID_OUTPUTS = ("container",)
 PYTHON_PACKAGE_REGISTRY = "nresare/python"
 
 logger = logging.getLogger("pipelinegen")
+
+
+class PipelineYamlDumper(yaml.SafeDumper):
+    def increase_indent(self, flow: bool = False, indentless: bool = False) -> Any:
+        return super().increase_indent(flow, False)
+
+
+def str_presenter(dumper: yaml.SafeDumper, data: str) -> yaml.nodes.ScalarNode:
+    style = "|" if "\n" in data else None
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data, style=style)
+
+
+PipelineYamlDumper.add_representer(str, str_presenter)
 
 
 @dataclass(frozen=True)
@@ -111,22 +126,33 @@ def read_variant(config_path: Path) -> PipelineVariant:
     return read_config(config_path).variant
 
 
-def docker_image_publish_step(tag: str, depends_on: str) -> list[str]:
+def render_pipeline_yaml(pipeline: dict[str, object]) -> str:
+    return yaml.dump(
+        pipeline,
+        Dumper=PipelineYamlDumper,
+        sort_keys=False,
+        default_flow_style=False,
+    )
+
+
+def docker_image_publish_step(tag: str, depends_on: str) -> dict[str, object]:
     image_name, image_tag = tag.split(":", 1)
-    return [
-        "  - label: ':whale: build docker image'",
-        f"    depends_on: {depends_on}",
-        "    agents:",
-        "      arch: arm64",
-        f"    command: docker buildx build -t {tag} .",
-        "    plugins:",
-        "      - docker-image-push#v1.1.0:",
-        "          buildkite:",
-        "            auth-method: oidc",
-        f"          image: {image_name}",
-        "          provider: buildkite",
-        f"          tag: {image_tag}",
-    ]
+    return {
+        "label": ":whale: build docker image",
+        "depends_on": depends_on,
+        "agents": {"arch": "arm64"},
+        "command": f"docker buildx build -t {tag} .",
+        "plugins": [
+            {
+                "docker-image-push#v1.1.0": {
+                    "buildkite": {"auth-method": "oidc"},
+                    "image": image_name,
+                    "provider": "buildkite",
+                    "tag": image_tag,
+                }
+            }
+        ],
+    }
 
 
 def rust_pipeline_yaml(
@@ -135,46 +161,47 @@ def rust_pipeline_yaml(
     output: PipelineOutput = None,
     should_publish: bool = False,
 ) -> str:
-    lines = [
-        "steps:",
-        "  - label: ':rust: rust build and test'",
-        "    env:",
-        "      RUSTFLAGS: -Dwarnings",
-        "    commands:",
-        "      - cargo fmt --check",
-        "      - cargo clippy --workspace --locked --all-targets",
-        "      - cargo test --workspace --locked",
-        "    key: test",
+    steps: list[dict[str, object]] = [
+        {
+            "label": ":rust: rust build and test",
+            "env": {"RUSTFLAGS": "-Dwarnings"},
+            "commands": [
+                "cargo fmt --check",
+                "cargo clippy --workspace --locked --all-targets",
+                "cargo test --workspace --locked",
+            ],
+            "key": "test",
+        }
     ]
 
     if output == "container" and should_publish:
         if tag is None:
             raise ValueError("tag is required for container output")
-        lines.extend(docker_image_publish_step(tag, "test"))
+        steps.append(docker_image_publish_step(tag, "test"))
 
-    return "\n".join(lines) + "\n"
+    return render_pipeline_yaml({"steps": steps})
 
 
-def uv_test_and_build_step(publish: bool = False) -> list[str]:
-    steps = [
-        "steps:",
-        '  - label: ":test_tube: Test and Build"',
-        "    key: test-and-build",
-        "    command: |",
-        "      uv run ruff check",
-        "      uv run ruff format --check",
-        "      uv run pytest",
-        "      uv build --wheel",
-        "      uv run ty check",
+def uv_test_and_build_step(publish: bool = False) -> dict[str, object]:
+    commands = [
+        "uv run ruff check",
+        "uv run ruff format --check",
+        "uv run pytest",
+        "uv build --wheel",
+        "uv run ty check",
     ]
     if publish:
-        steps.extend(
+        commands.extend(
             [
-                "      export UV_PUBLISH_TOKEN=$$(buildkite-agent oidc request-token --audience repo.noa.re)",
-                "      uv publish --index repo.noa.re",
+                "export UV_PUBLISH_TOKEN=$$(buildkite-agent oidc request-token --audience repo.noa.re)",
+                "uv publish --index repo.noa.re",
             ]
         )
-    return steps
+    return {
+        "label": ":test_tube: Test and Build",
+        "key": "test-and-build",
+        "command": "\n".join(commands),
+    }
 
 
 def uv_pipeline_yaml(
@@ -183,12 +210,12 @@ def uv_pipeline_yaml(
     output: PipelineOutput = None,
     should_publish: bool = False,
 ) -> str:
-    lines = uv_test_and_build_step(should_publish and output != "container")
+    steps = [uv_test_and_build_step(should_publish and output != "container")]
     if output == "container" and should_publish:
         if tag is None:
             raise ValueError("tag is required for container output")
-        lines.extend(docker_image_publish_step(tag, "test-and-build"))
-    return "\n".join(lines) + "\n"
+        steps.append(docker_image_publish_step(tag, "test-and-build"))
+    return render_pipeline_yaml({"steps": steps})
 
 
 def diffcomment_pipeline_yaml(
@@ -198,16 +225,23 @@ def diffcomment_pipeline_yaml(
     should_publish: bool = False,
 ) -> str:
     del tag, output, should_publish
-    lines = [
-        "steps:",
-        '  - label: ":pipeline:"',
-        "    command: |",
-        "      uv venv",
-        "      uv pip install --pre --upgrade bktools \\",
-        '        --extra-index-url="https://repo.noa.re"',
-        "      uv run diffcomment",
-    ]
-    return "\n".join(lines) + "\n"
+    return render_pipeline_yaml(
+        {
+            "steps": [
+                {
+                    "label": ":pipeline:",
+                    "command": "\n".join(
+                        [
+                            "uv venv",
+                            "uv pip install --pre --upgrade bktools \\",
+                            '  --extra-index-url="https://repo.noa.re"',
+                            "uv run diffcomment",
+                        ]
+                    ),
+                }
+            ]
+        }
+    )
 
 
 def pipeline_yaml(
