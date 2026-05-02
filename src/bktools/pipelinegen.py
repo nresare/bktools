@@ -8,6 +8,7 @@ import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from bktools.image_version_hash import docker_image_tag, git_toplevel
 
@@ -21,9 +22,15 @@ logger = logging.getLogger("pipelinegen")
 
 
 @dataclass(frozen=True)
+class DiffcommentConfig:
+    target_repository: str
+
+
+@dataclass(frozen=True)
 class PipelineConfig:
     variant: PipelineVariant
     output: PipelineOutput = None
+    diffcomment: DiffcommentConfig | None = None
 
 
 def read_config(config_path: Path) -> PipelineConfig:
@@ -68,7 +75,36 @@ def read_config(config_path: Path) -> PipelineConfig:
         )
         return PipelineConfig(variant="rust", output="container")
 
-    return PipelineConfig(variant=variant, output=output)
+    diffcomment = None
+    if variant == "diffcomment":
+        diffcomment = read_diffcomment_config(config, config_path)
+
+    return PipelineConfig(variant=variant, output=output, diffcomment=diffcomment)
+
+
+def read_diffcomment_config(
+    config: dict[str, object], config_path: Path
+) -> DiffcommentConfig:
+    entries = config.get("diffcomment")
+    if (
+        not isinstance(entries, list)
+        or len(entries) != 1
+        or not isinstance(entries[0], dict)
+    ):
+        raise SystemExit(
+            f"pipelinegen config {config_path} variant 'diffcomment' requires "
+            "exactly one [[diffcomment]] table"
+        )
+
+    entry = cast(dict[str, object], entries[0])
+    target_repository = entry.get("target_repository")
+    if not isinstance(target_repository, str) or not target_repository:
+        raise SystemExit(
+            f"pipelinegen config {config_path} [[diffcomment]] must contain "
+            "string key 'target_repository'"
+        )
+
+    return DiffcommentConfig(target_repository=target_repository)
 
 
 def read_variant(config_path: Path) -> PipelineVariant:

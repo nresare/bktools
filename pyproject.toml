@@ -9,7 +9,7 @@ dependencies = [
 ]
 
 [project.scripts]
-pipelinegen = "bktools.idcat_pipeline:main"
+pipelinegen = "bktools.pipelinegen:main"
 bktools-image-version-hash = "bktools.image_version_hash:main"
 diffcomment = "bktools.diffcomment:main"
 

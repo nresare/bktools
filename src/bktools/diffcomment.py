@@ -6,20 +6,32 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
+import tomllib
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import dataclass
+from importlib import import_module
 from io import StringIO
+from pathlib import Path
+from typing import cast
 
-from manifest_builder.cli import main as manifest_builder_main
 
-
-AUDIENCE = "idcat.noa.re"
-IDCAT_BASE_URL = "https://idcat.noa.re/proxy"
+GITHUB_PROXY_AUDIENCE = "github-api-proxy.noa.re"
+GITHUB_PROXY_BASE_URL = "https://github-api-proxy.noa.re/proxy"
 GITHUB_API_VERSION = "2026-03-10"
 MAX_COMMENT_BYTES = 60_000
+PIPELINEGEN_CONFIG = Path(".buildkite/pipelinegen.toml")
+MANIFEST_CONFIG_DIR = Path("conf")
 
 logger = logging.getLogger("diffcomment")
+
+
+@dataclass(frozen=True)
+class DiffcommentConfig:
+    target_repository: str
 
 
 def main() -> int:
@@ -38,13 +50,13 @@ def main() -> int:
         )
         return 0
 
-    logger.info("running manifest-builder --diff for pull request #%s", pr_number)
+    logger.info("running manifest-builder diff for pull request #%s", pr_number)
     returncode, output = run_manifest_builder_diff()
-    logger.info("manifest-builder --diff exited with code %s", returncode)
+    logger.info("manifest-builder diff exited with code %s", returncode)
 
     owner, repo = github_repo()
-    logger.info("requesting idcat token for GitHub comment")
-    token = request_idcat_token()
+    logger.info("requesting GitHub API proxy token for GitHub comment")
+    token = request_github_proxy_token()
 
     body = build_comment_body(pr_number, returncode, output)
     logger.info(
@@ -59,17 +71,78 @@ def main() -> int:
     return returncode
 
 
-def run_manifest_builder_diff() -> tuple[int, str]:
+def run_manifest_builder_diff(
+    config_path: Path = PIPELINEGEN_CONFIG,
+    manifest_config_dir: Path = MANIFEST_CONFIG_DIR,
+) -> tuple[int, str]:
     output = StringIO()
     try:
         with redirect_stdout(output), redirect_stderr(output):
-            result = manifest_builder_main(args=["--diff"], standalone_mode=False)
+            result = run_manifest_builder_show_diff(config_path, manifest_config_dir)
     except SystemExit as error:
         returncode = int(error.code) if isinstance(error.code, int) else 1
     else:
         returncode = int(result) if isinstance(result, int) else 0
 
     return returncode, output.getvalue()
+
+
+def run_manifest_builder_show_diff(
+    config_path: Path = PIPELINEGEN_CONFIG,
+    manifest_config_dir: Path = MANIFEST_CONFIG_DIR,
+) -> int:
+    config = read_diffcomment_config(config_path)
+    with tempfile.TemporaryDirectory(prefix="bktools-diffcomment-") as tmpdir:
+        output_dir = Path(tmpdir) / "output"
+        clone_target_repository(config.target_repository, output_dir)
+        diff_output = manifest_builder_show_diff(manifest_config_dir, output_dir)
+
+    if diff_output:
+        print(diff_output, end="")
+    else:
+        print("The output is identical before and after this change")
+    return 0
+
+
+def read_diffcomment_config(config_path: Path) -> DiffcommentConfig:
+    try:
+        config = tomllib.loads(config_path.read_text())
+    except FileNotFoundError as error:
+        raise SystemExit(f"diffcomment config not found: {config_path}") from error
+    except tomllib.TOMLDecodeError as error:
+        raise SystemExit(
+            f"failed to parse diffcomment config {config_path}: {error}"
+        ) from error
+
+    entries = config.get("diffcomment")
+    if not isinstance(entries, list) or len(entries) != 1:
+        raise SystemExit(
+            f"diffcomment config {config_path} must contain exactly one [[diffcomment]] table"
+        )
+
+    target_repository = entries[0].get("target_repository")
+    if not isinstance(target_repository, str) or not target_repository:
+        raise SystemExit(
+            f"diffcomment config {config_path} [[diffcomment]] must contain "
+            "string key 'target_repository'"
+        )
+
+    return DiffcommentConfig(target_repository=target_repository)
+
+
+def clone_target_repository(target_repository: str, output_dir: Path) -> None:
+    logger.info("cloning target repository %s to %s", target_repository, output_dir)
+    subprocess.run(
+        ["git", "clone", "--depth", "1", target_repository, str(output_dir)],
+        check=True,
+    )
+
+
+def manifest_builder_show_diff(config: Path, output: Path) -> str:
+    module = import_module("manifest_builder.cli")
+    show_diff = cast(Callable[[Path, Path], str], getattr(module, "show_diff"))
+
+    return show_diff(config, output)
 
 
 def github_repo() -> tuple[str, str]:
@@ -84,9 +157,10 @@ def github_repo() -> tuple[str, str]:
     return match.group(1), match.group(2)
 
 
-def request_idcat_token() -> str:
+def request_github_proxy_token() -> str:
+    audience = os.environ.get("BKTOOLS_GITHUB_PROXY_AUDIENCE", GITHUB_PROXY_AUDIENCE)
     return subprocess.check_output(
-        ["buildkite-agent", "oidc", "request-token", "--audience", AUDIENCE],
+        ["buildkite-agent", "oidc", "request-token", "--audience", audience],
         text=True,
     ).strip()
 
@@ -96,7 +170,7 @@ def build_comment_body(pr_number: str, returncode: int, output: str) -> str:
     commit = os.environ.get("BUILDKITE_COMMIT")
 
     lines = [
-        "### `manifest-builder --diff`",
+        "### `manifest-builder diff`",
         "",
         f"Pull request: #{pr_number}",
     ]
@@ -136,8 +210,9 @@ def truncate_comment(body: str) -> str:
 def post_issue_comment(
     token: str, owner: str, repo: str, pr_number: str, body: str
 ) -> None:
+    base_url = os.environ.get("BKTOOLS_GITHUB_PROXY_BASE_URL", GITHUB_PROXY_BASE_URL)
     url = (
-        f"{IDCAT_BASE_URL}/nresare-buildsystem/repos/{owner}/{repo}"
+        f"{base_url}/nresare-buildsystem/repos/{owner}/{repo}"
         f"/issues/{pr_number}/comments"
     )
     request = urllib.request.Request(

@@ -23,9 +23,18 @@ uv run pytest
   - `variant = "rust"`: Rust build/test.
   - `variant = "uv"`: uv/ruff/pytest/build/ty checks plus a main-branch Python
     package publish step.
-  - `variant = "diffcomment"`: run `manifest-builder --diff` on pull request
-    builds through the `diffcomment` entrypoint and post the output as a GitHub
-    PR comment through idcat.
+  - `variant = "diffcomment"`: run manifest-builder diff generation on pull
+    request builds through the `diffcomment` entrypoint and post the output as a
+    GitHub PR comment through the configured GitHub API proxy. Requires a
+    `[[diffcomment]]` table with `target_repository`, which is shallow-cloned as
+    the manifest output repository before diff generation.
+
+    ```toml
+    variant = "diffcomment"
+
+    [[diffcomment]]
+    target_repository = "https://github.com/example/manifests.git"
+    ```
   - `output = "container"`: add a main-branch Docker publish step using
     `docker buildx build` and `docker-image-push`.
   - `variant = "rust-container"` is deprecated. Use `variant = "rust"` with

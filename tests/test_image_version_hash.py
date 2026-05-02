@@ -60,7 +60,7 @@ def test_version_from_tag_parses_v_prefixed_semver_tags(
 
 def test_docker_image_tag_uses_cargo_metadata_and_context_hash(tmp_path: Path) -> None:
     (tmp_path / "Cargo.toml").write_text(
-        '[package]\nname = "idcat"\nversion = "0.1.0"\n'
+        '[package]\nname = "example-app"\nversion = "0.1.0"\n'
     )
     (tmp_path / "Dockerfile").write_text("FROM scratch\n")
     (tmp_path / ".dockerignore").write_text("ignored.txt\n")
@@ -68,8 +68,8 @@ def test_docker_image_tag_uses_cargo_metadata_and_context_hash(tmp_path: Path) -
 
     tag = docker_image_tag(tmp_path)
 
-    assert tag.startswith("idcat:0.1.0-")
-    assert len(tag.removeprefix("idcat:0.1.0-")) == 8
+    assert tag.startswith("example-app:0.1.0-")
+    assert len(tag.removeprefix("example-app:0.1.0-")) == 8
 
 
 def test_docker_context_hash_ignores_dockerignore_file_contents(
