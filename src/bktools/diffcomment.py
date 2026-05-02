@@ -7,34 +7,33 @@ import re
 import subprocess
 import sys
 import tempfile
-import tomllib
 import urllib.error
 import urllib.request
 from collections.abc import Callable
 from contextlib import redirect_stderr, redirect_stdout
-from dataclasses import dataclass
 from importlib import import_module
 from io import StringIO
 from pathlib import Path
 from typing import cast
 
+import click
 
-GITHUB_PROXY_AUDIENCE = "github-api-proxy.noa.re"
-GITHUB_PROXY_BASE_URL = "https://github-api-proxy.noa.re/proxy"
+
+GITHUB_PROXY_AUDIENCE = "idcat.noa.re"
+GITHUB_PROXY_BASE_URL = "https://idcat.noa.re/proxy"
 GITHUB_API_VERSION = "2026-03-10"
 MAX_COMMENT_BYTES = 60_000
-PIPELINEGEN_CONFIG = Path(".buildkite/pipelinegen.toml")
 MANIFEST_CONFIG_DIR = Path("conf")
 
 logger = logging.getLogger("diffcomment")
 
 
-@dataclass(frozen=True)
-class DiffcommentConfig:
-    target_repository: str
-
-
-def main() -> int:
+@click.command()
+@click.option(
+    "--target-repository",
+    help="Repository to shallow-clone as the manifest output before diff generation.",
+)
+def main(target_repository: str | None) -> None:
     logging.basicConfig(
         format="%(asctime)s %(levelname)s %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
@@ -48,10 +47,15 @@ def main() -> int:
         logger.info(
             "skipping manifest diff comment because this build was not triggered by a pull request"
         )
-        return 0
+        return
+
+    if not target_repository:
+        raise click.UsageError(
+            "diffcomment requires --target-repository for pull requests"
+        )
 
     logger.info("running manifest-builder diff for pull request #%s", pr_number)
-    returncode, output = run_manifest_builder_diff()
+    returncode, output = run_manifest_builder_diff(target_repository)
     logger.info("manifest-builder diff exited with code %s", returncode)
 
     owner, repo = github_repo()
@@ -68,17 +72,19 @@ def main() -> int:
     post_issue_comment(token, owner, repo, pr_number, body)
     logger.info("posted manifest diff comment")
 
-    return returncode
+    raise click.exceptions.Exit(returncode)
 
 
 def run_manifest_builder_diff(
-    config_path: Path = PIPELINEGEN_CONFIG,
+    target_repository: str,
     manifest_config_dir: Path = MANIFEST_CONFIG_DIR,
 ) -> tuple[int, str]:
     output = StringIO()
     try:
         with redirect_stdout(output), redirect_stderr(output):
-            result = run_manifest_builder_show_diff(config_path, manifest_config_dir)
+            result = run_manifest_builder_show_diff(
+                target_repository, manifest_config_dir
+            )
     except SystemExit as error:
         returncode = int(error.code) if isinstance(error.code, int) else 1
     else:
@@ -88,13 +94,12 @@ def run_manifest_builder_diff(
 
 
 def run_manifest_builder_show_diff(
-    config_path: Path = PIPELINEGEN_CONFIG,
+    target_repository: str,
     manifest_config_dir: Path = MANIFEST_CONFIG_DIR,
 ) -> int:
-    config = read_diffcomment_config(config_path)
     with tempfile.TemporaryDirectory(prefix="bktools-diffcomment-") as tmpdir:
         output_dir = Path(tmpdir) / "output"
-        clone_target_repository(config.target_repository, output_dir)
+        clone_target_repository(target_repository, output_dir)
         diff_output = manifest_builder_show_diff(manifest_config_dir, output_dir)
 
     if diff_output:
@@ -102,32 +107,6 @@ def run_manifest_builder_show_diff(
     else:
         print("The output is identical before and after this change")
     return 0
-
-
-def read_diffcomment_config(config_path: Path) -> DiffcommentConfig:
-    try:
-        config = tomllib.loads(config_path.read_text())
-    except FileNotFoundError as error:
-        raise SystemExit(f"diffcomment config not found: {config_path}") from error
-    except tomllib.TOMLDecodeError as error:
-        raise SystemExit(
-            f"failed to parse diffcomment config {config_path}: {error}"
-        ) from error
-
-    entries = config.get("diffcomment")
-    if not isinstance(entries, list) or len(entries) != 1:
-        raise SystemExit(
-            f"diffcomment config {config_path} must contain exactly one [[diffcomment]] table"
-        )
-
-    target_repository = entries[0].get("target_repository")
-    if not isinstance(target_repository, str) or not target_repository:
-        raise SystemExit(
-            f"diffcomment config {config_path} [[diffcomment]] must contain "
-            "string key 'target_repository'"
-        )
-
-    return DiffcommentConfig(target_repository=target_repository)
 
 
 def clone_target_repository(target_repository: str, output_dir: Path) -> None:
@@ -236,4 +215,4 @@ def post_issue_comment(
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

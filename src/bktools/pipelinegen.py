@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import shlex
 import subprocess
 import sys
 import tomllib
@@ -219,6 +220,7 @@ def uv_pipeline_yaml(
 
 
 def diffcomment_pipeline_yaml(
+    target_repository: str,
     tag: str | None = None,
     *,
     output: PipelineOutput = None,
@@ -235,7 +237,10 @@ def diffcomment_pipeline_yaml(
                             "uv venv",
                             "uv pip install --pre --upgrade bktools \\",
                             '  --extra-index-url="https://repo.noa.re"',
-                            "uv run diffcomment",
+                            (
+                                "uv run diffcomment --target-repository "
+                                f"{shlex.quote(target_repository)}"
+                            ),
                         ]
                     ),
                 }
@@ -250,6 +255,7 @@ def pipeline_yaml(
     variant: PipelineVariant = "rust",
     output: PipelineOutput = None,
     should_publish: bool = False,
+    diffcomment: DiffcommentConfig | None = None,
 ) -> str:
     if variant == "rust-container":
         variant = "rust"
@@ -262,8 +268,13 @@ def pipeline_yaml(
         return uv_pipeline_yaml(tag, output=output, should_publish=should_publish)
 
     if variant == "diffcomment":
+        if diffcomment is None:
+            raise ValueError("diffcomment config is required for diffcomment variant")
         return diffcomment_pipeline_yaml(
-            tag, output=output, should_publish=should_publish
+            diffcomment.target_repository,
+            tag,
+            output=output,
+            should_publish=should_publish,
         )
 
     raise ValueError(f"unknown pipeline variant: {variant}")
@@ -344,6 +355,7 @@ def main() -> None:
         variant=config.variant,
         output=config.output,
         should_publish=should_publish,
+        diffcomment=config.diffcomment,
     )
     if args.dump:
         sys.stdout.write(yaml)

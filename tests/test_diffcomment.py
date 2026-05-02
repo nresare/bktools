@@ -2,6 +2,8 @@ import pytest
 import subprocess
 from pathlib import Path
 
+from click.testing import CliRunner
+
 from bktools import diffcomment
 
 
@@ -19,20 +21,24 @@ def clean_buildkite_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(name, raising=False)
 
 
-def test_main_skips_non_pull_request(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_main_skips_non_pull_request(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "false")
 
-    assert diffcomment.main() == 0
-    assert "skipping manifest diff comment" in capsys.readouterr().err
+    result = CliRunner().invoke(diffcomment.main)
+
+    assert result.exit_code == 0
+    assert "skipping manifest diff comment" in result.stderr
 
 
 def test_main_posts_comment_for_pull_request(monkeypatch: pytest.MonkeyPatch) -> None:
     posted = []
     monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "42")
     monkeypatch.setenv("BUILDKITE_REPO", "git@github.com:nresare/berries-config.git")
-    monkeypatch.setattr(diffcomment, "run_manifest_builder_diff", lambda: (7, "diff"))
+    monkeypatch.setattr(
+        diffcomment,
+        "run_manifest_builder_diff",
+        lambda target_repository: (7, "diff"),
+    )
     monkeypatch.setattr(diffcomment, "request_github_proxy_token", lambda: "token")
     monkeypatch.setattr(
         diffcomment,
@@ -42,7 +48,12 @@ def test_main_posts_comment_for_pull_request(monkeypatch: pytest.MonkeyPatch) ->
         ),
     )
 
-    assert diffcomment.main() == 7
+    result = CliRunner().invoke(
+        diffcomment.main,
+        ["--target-repository", "https://github.com/nresare/manifests.git"],
+    )
+
+    assert result.exit_code == 7
     assert posted == [
         (
             "token",
@@ -59,18 +70,20 @@ def test_main_posts_comment_for_pull_request(monkeypatch: pytest.MonkeyPatch) ->
     ]
 
 
+def test_main_requires_target_repository_for_pull_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "42")
+
+    result = CliRunner().invoke(diffcomment.main)
+
+    assert result.exit_code == 2
+    assert "requires --target-repository" in result.output
+
+
 def test_run_manifest_builder_diff_clones_target_and_calls_show_diff(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config_dir = tmp_path / ".buildkite"
-    config_dir.mkdir()
-    config_path = config_dir / "pipelinegen.toml"
-    config_path.write_text(
-        'variant = "diffcomment"\n'
-        "\n"
-        "[[diffcomment]]\n"
-        'target_repository = "https://github.com/nresare/manifests.git"\n'
-    )
     manifest_config = tmp_path / "conf"
     calls = []
 
@@ -86,7 +99,8 @@ def test_run_manifest_builder_diff_clones_target_and_calls_show_diff(
     monkeypatch.setattr(diffcomment, "manifest_builder_show_diff", fake_show_diff)
 
     assert diffcomment.run_manifest_builder_diff(
-        config_path=config_path, manifest_config_dir=manifest_config
+        target_repository="https://github.com/nresare/manifests.git",
+        manifest_config_dir=manifest_config,
     ) == (0, "diff output\n")
     assert calls == [
         (
@@ -103,30 +117,6 @@ def test_run_manifest_builder_diff_clones_target_and_calls_show_diff(
         ),
         ("show_diff", [str(manifest_config), "output"], True),
     ]
-
-
-def test_read_diffcomment_config_reads_target_repository(tmp_path: Path) -> None:
-    config_path = tmp_path / "pipelinegen.toml"
-    config_path.write_text(
-        'variant = "diffcomment"\n'
-        "\n"
-        "[[diffcomment]]\n"
-        'target_repository = "git@github.com:nresare/manifests.git"\n'
-    )
-
-    assert diffcomment.read_diffcomment_config(config_path) == (
-        diffcomment.DiffcommentConfig(
-            target_repository="git@github.com:nresare/manifests.git"
-        )
-    )
-
-
-def test_read_diffcomment_config_requires_target_repository(tmp_path: Path) -> None:
-    config_path = tmp_path / "pipelinegen.toml"
-    config_path.write_text('variant = "diffcomment"\n[[diffcomment]]\n')
-
-    with pytest.raises(SystemExit, match="target_repository"):
-        diffcomment.read_diffcomment_config(config_path)
 
 
 def test_github_repo_parses_buildkite_repo(monkeypatch: pytest.MonkeyPatch) -> None:
