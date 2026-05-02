@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from bktools.idcat_pipeline import (
+from bktools.pipelinegen import (
+    DiffcommentConfig,
     PipelineConfig,
     diffcomment_pipeline_yaml,
     main,
@@ -19,7 +20,7 @@ from bktools.idcat_pipeline import (
 
 
 def test_pipeline_yaml_without_publish_contains_test_step_only() -> None:
-    pipeline = pipeline_yaml("idcat:0.1.0-deadbeef", variant="rust-container")
+    pipeline = pipeline_yaml("example-app:0.1.0-deadbeef", variant="rust-container")
 
     assert "key: test" in pipeline
     assert "docker buildx build" not in pipeline
@@ -27,26 +28,28 @@ def test_pipeline_yaml_without_publish_contains_test_step_only() -> None:
 
 def test_pipeline_yaml_with_publish_adds_docker_push_step() -> None:
     pipeline = pipeline_yaml(
-        "idcat:0.1.0-deadbeef", variant="rust-container", should_publish=True
+        "example-app:0.1.0-deadbeef",
+        variant="rust-container",
+        should_publish=True,
     )
 
     assert "depends_on: test" in pipeline
-    assert "command: docker buildx build -t idcat:0.1.0-deadbeef ." in pipeline
-    assert "image: idcat" in pipeline
+    assert "command: docker buildx build -t example-app:0.1.0-deadbeef ." in pipeline
+    assert "image: example-app" in pipeline
     assert "tag: 0.1.0-deadbeef" in pipeline
 
 
 def test_rust_pipeline_with_container_output_adds_docker_push_step() -> None:
     pipeline = pipeline_yaml(
-        "idcat:0.1.0-deadbeef",
+        "example-app:0.1.0-deadbeef",
         variant="rust",
         output="container",
         should_publish=True,
     )
 
     assert "depends_on: test" in pipeline
-    assert "command: docker buildx build -t idcat:0.1.0-deadbeef ." in pipeline
-    assert "image: idcat" in pipeline
+    assert "command: docker buildx build -t example-app:0.1.0-deadbeef ." in pipeline
+    assert "image: example-app" in pipeline
     assert "tag: 0.1.0-deadbeef" in pipeline
 
 
@@ -73,7 +76,7 @@ def test_uv_pipeline_yaml_with_publish_adds_publish_commands() -> None:
 
 def test_uv_pipeline_with_container_output_uses_uv_steps_and_docker_publish() -> None:
     pipeline = pipeline_yaml(
-        "idcat:0.1.0-deadbeef",
+        "example-app:0.1.0-deadbeef",
         variant="uv",
         output="container",
         should_publish=True,
@@ -84,9 +87,9 @@ def test_uv_pipeline_with_container_output_uses_uv_steps_and_docker_publish() ->
     assert "uv build --wheel" in pipeline
     assert "uv run ty check" in pipeline
     assert "depends_on: test-and-build" in pipeline
-    assert "command: docker buildx build -t idcat:0.1.0-deadbeef ." in pipeline
+    assert "command: docker buildx build -t example-app:0.1.0-deadbeef ." in pipeline
     assert "docker-image-push#v1.1.0" in pipeline
-    assert "image: idcat" in pipeline
+    assert "image: example-app" in pipeline
     assert "tag: 0.1.0-deadbeef" in pipeline
     assert "uv publish" not in pipeline
     assert "publish-to-packages" not in pipeline
@@ -95,7 +98,9 @@ def test_uv_pipeline_with_container_output_uses_uv_steps_and_docker_publish() ->
 def test_uv_pipeline_with_container_output_without_publish_has_no_publish_step() -> (
     None
 ):
-    pipeline = pipeline_yaml("idcat:0.1.0-deadbeef", variant="uv", output="container")
+    pipeline = pipeline_yaml(
+        "example-app:0.1.0-deadbeef", variant="uv", output="container"
+    )
 
     assert "uv run pytest" in pipeline
     assert "docker-image-push" not in pipeline
@@ -140,9 +145,27 @@ def test_read_config_loads_variant_and_output_from_config(tmp_path: Path) -> Non
 
 def test_read_config_accepts_diffcomment_variant(tmp_path: Path) -> None:
     config_path = tmp_path / "pipelinegen.toml"
-    config_path.write_text('variant = "diffcomment"\n')
+    config_path.write_text(
+        'variant = "diffcomment"\n'
+        "\n"
+        "[[diffcomment]]\n"
+        'target_repository = "https://github.com/nresare/manifests.git"\n'
+    )
 
-    assert read_config(config_path) == PipelineConfig(variant="diffcomment")
+    assert read_config(config_path) == PipelineConfig(
+        variant="diffcomment",
+        diffcomment=DiffcommentConfig(
+            target_repository="https://github.com/nresare/manifests.git"
+        ),
+    )
+
+
+def test_read_config_requires_diffcomment_target_repository(tmp_path: Path) -> None:
+    config_path = tmp_path / "pipelinegen.toml"
+    config_path.write_text('variant = "diffcomment"\n[[diffcomment]]\n')
+
+    with pytest.raises(SystemExit, match="target_repository"):
+        read_config(config_path)
 
 
 def test_read_variant_loads_variant_from_config(tmp_path: Path) -> None:
@@ -207,16 +230,18 @@ def test_main_uses_uv_container_output_and_logs_docker_target(
     )
     monkeypatch.setenv("BUILDKITE_BRANCH", "main")
     monkeypatch.setattr(
-        "bktools.idcat_pipeline.docker_image_tag",
-        lambda repo_root: "idcat:0.1.0-deadbeef",
+        "bktools.pipelinegen.docker_image_tag",
+        lambda repo_root: "example-app:0.1.0-deadbeef",
     )
 
     main()
 
     captured = capsys.readouterr()
     assert "uv run pytest" in captured.out
-    assert "command: docker buildx build -t idcat:0.1.0-deadbeef ." in captured.out
-    assert "building on main branch, uploading to idcat" in captured.err
+    assert (
+        "command: docker buildx build -t example-app:0.1.0-deadbeef ." in captured.out
+    )
+    assert "building on main branch, uploading to example-app" in captured.err
 
 
 def test_upload_pipeline_invokes_buildkite_agent(
@@ -275,9 +300,9 @@ def test_main_uploads_by_default(
     uploaded = []
     uploaded_artifacts = []
     monkeypatch.setattr("sys.argv", ["pipelinegen", "--repo-root", str(tmp_path)])
-    monkeypatch.setattr("bktools.idcat_pipeline.upload_pipeline", uploaded.append)
+    monkeypatch.setattr("bktools.pipelinegen.upload_pipeline", uploaded.append)
     monkeypatch.setattr(
-        "bktools.idcat_pipeline.upload_pipeline_artifact", uploaded_artifacts.append
+        "bktools.pipelinegen.upload_pipeline_artifact", uploaded_artifacts.append
     )
 
     main()

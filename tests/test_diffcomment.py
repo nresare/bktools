@@ -1,4 +1,6 @@
 import pytest
+import subprocess
+from pathlib import Path
 
 from bktools import diffcomment
 
@@ -11,6 +13,8 @@ def clean_buildkite_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "BUILDKITE_REPO",
         "BUILDKITE_BUILD_URL",
         "BUILDKITE_COMMIT",
+        "BKTOOLS_GITHUB_PROXY_AUDIENCE",
+        "BKTOOLS_GITHUB_PROXY_BASE_URL",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -29,7 +33,7 @@ def test_main_posts_comment_for_pull_request(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "42")
     monkeypatch.setenv("BUILDKITE_REPO", "git@github.com:nresare/berries-config.git")
     monkeypatch.setattr(diffcomment, "run_manifest_builder_diff", lambda: (7, "diff"))
-    monkeypatch.setattr(diffcomment, "request_idcat_token", lambda: "token")
+    monkeypatch.setattr(diffcomment, "request_github_proxy_token", lambda: "token")
     monkeypatch.setattr(
         diffcomment,
         "post_issue_comment",
@@ -45,7 +49,7 @@ def test_main_posts_comment_for_pull_request(monkeypatch: pytest.MonkeyPatch) ->
             "nresare",
             "berries-config",
             "42",
-            "### `manifest-builder --diff`\n\n"
+            "### `manifest-builder diff`\n\n"
             "Pull request: #42\n"
             "Exit code: `7`\n\n"
             "```diff\n"
@@ -55,22 +59,74 @@ def test_main_posts_comment_for_pull_request(monkeypatch: pytest.MonkeyPatch) ->
     ]
 
 
-def test_run_manifest_builder_diff_calls_cli_entrypoint(
-    monkeypatch: pytest.MonkeyPatch,
+def test_run_manifest_builder_diff_clones_target_and_calls_show_diff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    config_dir = tmp_path / ".buildkite"
+    config_dir.mkdir()
+    config_path = config_dir / "pipelinegen.toml"
+    config_path.write_text(
+        'variant = "diffcomment"\n'
+        "\n"
+        "[[diffcomment]]\n"
+        'target_repository = "https://github.com/nresare/manifests.git"\n'
+    )
+    manifest_config = tmp_path / "conf"
     calls = []
 
-    def fake_manifest_builder_main(*, args: list[str], standalone_mode: bool) -> int:
-        calls.append((args, standalone_mode))
-        print("diff output")
-        return 3
+    def fake_run(args: list[str], *, check: bool) -> subprocess.CompletedProcess[str]:
+        calls.append(("run", args[:-1], Path(args[-1]).name, check))
+        return subprocess.CompletedProcess(args, 0)
 
-    monkeypatch.setattr(
-        diffcomment, "manifest_builder_main", fake_manifest_builder_main
+    def fake_show_diff(config: Path, output: Path) -> str:
+        calls.append(("show_diff", [str(config), output.name], True))
+        return "diff output\n"
+
+    monkeypatch.setattr(diffcomment.subprocess, "run", fake_run)
+    monkeypatch.setattr(diffcomment, "manifest_builder_show_diff", fake_show_diff)
+
+    assert diffcomment.run_manifest_builder_diff(
+        config_path=config_path, manifest_config_dir=manifest_config
+    ) == (0, "diff output\n")
+    assert calls == [
+        (
+            "run",
+            [
+                "git",
+                "clone",
+                "--depth",
+                "1",
+                "https://github.com/nresare/manifests.git",
+            ],
+            "output",
+            True,
+        ),
+        ("show_diff", [str(manifest_config), "output"], True),
+    ]
+
+
+def test_read_diffcomment_config_reads_target_repository(tmp_path: Path) -> None:
+    config_path = tmp_path / "pipelinegen.toml"
+    config_path.write_text(
+        'variant = "diffcomment"\n'
+        "\n"
+        "[[diffcomment]]\n"
+        'target_repository = "git@github.com:nresare/manifests.git"\n'
     )
 
-    assert diffcomment.run_manifest_builder_diff() == (3, "diff output\n")
-    assert calls == [(["--diff"], False)]
+    assert diffcomment.read_diffcomment_config(config_path) == (
+        diffcomment.DiffcommentConfig(
+            target_repository="git@github.com:nresare/manifests.git"
+        )
+    )
+
+
+def test_read_diffcomment_config_requires_target_repository(tmp_path: Path) -> None:
+    config_path = tmp_path / "pipelinegen.toml"
+    config_path.write_text('variant = "diffcomment"\n[[diffcomment]]\n')
+
+    with pytest.raises(SystemExit, match="target_repository"):
+        diffcomment.read_diffcomment_config(config_path)
 
 
 def test_github_repo_parses_buildkite_repo(monkeypatch: pytest.MonkeyPatch) -> None:
