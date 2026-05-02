@@ -229,7 +229,7 @@ def diffcomment_pipeline_yaml(
         {
             "steps": [
                 {
-                    "label": ":pipeline:",
+                    "label": ":pipeline: Add comment to PR with diff",
                     "command": "\n".join(
                         [
                             "uv venv",

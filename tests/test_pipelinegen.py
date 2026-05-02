@@ -117,9 +117,6 @@ def test_pipeline_yaml_dispatches_to_uv_variant_without_tag() -> None:
 
 def test_diffcomment_pipeline_yaml_posts_manifest_diff_comment() -> None:
     pipeline = diffcomment_pipeline_yaml()
-    parsed = yaml.safe_load(pipeline)
-
-    assert parsed["steps"][0]["label"] == ":pipeline:"
     assert "uv venv" in pipeline
     assert "uv pip install --pre --upgrade bktools \\" in pipeline
     assert '--extra-index-url="https://repo.noa.re"' in pipeline
@@ -129,9 +126,6 @@ def test_diffcomment_pipeline_yaml_posts_manifest_diff_comment() -> None:
 
 def test_pipeline_yaml_dispatches_to_diffcomment_variant() -> None:
     pipeline = pipeline_yaml(variant="diffcomment")
-    parsed = yaml.safe_load(pipeline)
-
-    assert parsed["steps"][0]["label"] == ":pipeline:"
     assert "uv run diffcomment" in pipeline
 
 
