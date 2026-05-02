@@ -105,15 +105,24 @@ def main(input_dir: Path | None, dump: bool) -> None:
 def run_manifest_builder_diff(
     input_dir: Path,
 ) -> tuple[int, ManifestDiff]:
+    git_add_all(input_dir)
     diff_stat = git_diff_stat(input_dir)
     diff_output = git_diff(input_dir)
 
     return 0, ManifestDiff(stat=diff_stat, diff=diff_output)
 
 
+def git_add_all(output_dir: Path) -> None:
+    subprocess.run(
+        ["git", "add", "."],
+        cwd=output_dir,
+        check=True,
+    )
+
+
 def git_diff_stat(output_dir: Path) -> str:
     result = subprocess.run(
-        ["git", "diff", "--stat"],
+        ["git", "diff", "--cached", "--stat"],
         cwd=output_dir,
         text=True,
         capture_output=True,
@@ -124,7 +133,7 @@ def git_diff_stat(output_dir: Path) -> str:
 
 def git_diff(output_dir: Path) -> str:
     result = subprocess.run(
-        ["git", "diff"],
+        ["git", "diff", "--cached"],
         cwd=output_dir,
         text=True,
         capture_output=True,
