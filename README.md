@@ -23,22 +23,16 @@ uv run pytest
   - `variant = "rust"`: Rust build/test.
   - `variant = "uv"`: uv/ruff/pytest/build/ty checks plus a main-branch Python
     package publish step.
-  - `variant = "diffcomment"`: run manifest-builder diff generation on pull
-    request builds through the `diffcomment` entrypoint and post the output as a
-    GitHub PR comment through the configured GitHub API proxy. Requires a
-    `[[diffcomment]]` table with `target_repository`. `pipelinegen` passes that
-    value to `diffcomment --target-repository`, and `diffcomment` shallow-clones
-    it as the manifest output repository before diff generation. Use
-    `diffcomment --dump --target-repository <repo>` to write the generated
-    comment body to stdout for local testing. If the context diff is too long
-    for a GitHub comment, `diffcomment` uploads the full diff as a Buildkite
-    artifact.
+  - `variant = "manifest-builder"`: use `repo` as the manifest output
+    repository. On pull request builds, generate a diff comment through the
+    checkout and `diffcomment` entrypoints. On other builds, clone the output
+    repository, run `manifest_builder.generate()` with the current checkout as
+    input and the cloned repository as output, create a manifest commit, and push
+    it through the `manifest-builder-on-checkout` entrypoint.
 
     ```toml
-    variant = "diffcomment"
-
-    [[diffcomment]]
-    target_repository = "https://github.com/example/manifests.git"
+    variant = "manifest-builder"
+    repo = "https://github.com/example/manifests.git"
     ```
   - `output = "container"`: add a main-branch Docker publish step using
     `docker buildx build` and `docker-image-push`.

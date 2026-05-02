@@ -9,7 +9,7 @@ import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import yaml
 
@@ -17,7 +17,7 @@ from bktools.image_version_hash import docker_image_tag, git_toplevel
 
 PipelineVariant = str
 PipelineOutput = str | None
-VALID_VARIANTS = ("rust", "uv", "diffcomment", "rust-container")
+VALID_VARIANTS = ("rust", "uv", "manifest-builder", "rust-container")
 VALID_OUTPUTS = ("container",)
 PYTHON_PACKAGE_REGISTRY = "nresare/python"
 
@@ -38,15 +38,15 @@ PipelineYamlDumper.add_representer(str, str_presenter)
 
 
 @dataclass(frozen=True)
-class DiffcommentConfig:
-    target_repository: str
+class ManifestBuilderConfig:
+    repo: str
 
 
 @dataclass(frozen=True)
 class PipelineConfig:
     variant: PipelineVariant
     output: PipelineOutput = None
-    diffcomment: DiffcommentConfig | None = None
+    manifest_builder: ManifestBuilderConfig | None = None
 
 
 def read_config(config_path: Path) -> PipelineConfig:
@@ -91,36 +91,28 @@ def read_config(config_path: Path) -> PipelineConfig:
         )
         return PipelineConfig(variant="rust", output="container")
 
-    diffcomment = None
-    if variant == "diffcomment":
-        diffcomment = read_diffcomment_config(config, config_path)
+    manifest_builder = None
+    if variant == "manifest-builder":
+        manifest_builder = read_manifest_builder_config(config, config_path)
 
-    return PipelineConfig(variant=variant, output=output, diffcomment=diffcomment)
+    return PipelineConfig(
+        variant=variant,
+        output=output,
+        manifest_builder=manifest_builder,
+    )
 
 
-def read_diffcomment_config(
+def read_manifest_builder_config(
     config: dict[str, object], config_path: Path
-) -> DiffcommentConfig:
-    entries = config.get("diffcomment")
-    if (
-        not isinstance(entries, list)
-        or len(entries) != 1
-        or not isinstance(entries[0], dict)
-    ):
+) -> ManifestBuilderConfig:
+    repo = config.get("repo")
+    if not isinstance(repo, str) or not repo:
         raise SystemExit(
-            f"pipelinegen config {config_path} variant 'diffcomment' requires "
-            "exactly one [[diffcomment]] table"
+            f"pipelinegen config {config_path} variant 'manifest-builder' "
+            "requires string key 'repo'"
         )
 
-    entry = cast(dict[str, object], entries[0])
-    target_repository = entry.get("target_repository")
-    if not isinstance(target_repository, str) or not target_repository:
-        raise SystemExit(
-            f"pipelinegen config {config_path} [[diffcomment]] must contain "
-            "string key 'target_repository'"
-        )
-
-    return DiffcommentConfig(target_repository=target_repository)
+    return ManifestBuilderConfig(repo=repo)
 
 
 def read_variant(config_path: Path) -> PipelineVariant:
@@ -238,8 +230,43 @@ def diffcomment_pipeline_yaml(
                             "uv pip install --pre --upgrade bktools \\",
                             '  --extra-index-url="https://repo.noa.re"',
                             (
-                                "uv run diffcomment --target-repository "
-                                f"{shlex.quote(target_repository)}"
+                                "checkout=$$(uv run manifest-builder-on-checkout --repo "
+                                f"{shlex.quote(target_repository)} --no-commit)"
+                            ),
+                            "uv run diffcomment --input $$checkout",
+                        ]
+                    ),
+                }
+            ]
+        }
+    )
+
+
+def manifest_builder_pipeline_yaml(
+    repo: str,
+    tag: str | None = None,
+    *,
+    output: PipelineOutput = None,
+    should_publish: bool = False,
+    is_pull_request: bool = False,
+) -> str:
+    del tag, output, should_publish
+    if is_pull_request:
+        return diffcomment_pipeline_yaml(repo)
+
+    return render_pipeline_yaml(
+        {
+            "steps": [
+                {
+                    "label": ":pipeline: Generate and push manifests",
+                    "command": "\n".join(
+                        [
+                            "uv venv",
+                            "uv pip install --pre --upgrade bktools \\",
+                            '  --extra-index-url="https://repo.noa.re"',
+                            (
+                                "uv run manifest-builder-on-checkout --repo "
+                                f"{shlex.quote(repo)}"
                             ),
                         ]
                     ),
@@ -255,7 +282,8 @@ def pipeline_yaml(
     variant: PipelineVariant = "rust",
     output: PipelineOutput = None,
     should_publish: bool = False,
-    diffcomment: DiffcommentConfig | None = None,
+    manifest_builder: ManifestBuilderConfig | None = None,
+    is_pull_request: bool = False,
 ) -> str:
     if variant == "rust-container":
         variant = "rust"
@@ -267,17 +295,24 @@ def pipeline_yaml(
     if variant == "uv":
         return uv_pipeline_yaml(tag, output=output, should_publish=should_publish)
 
-    if variant == "diffcomment":
-        if diffcomment is None:
-            raise ValueError("diffcomment config is required for diffcomment variant")
-        return diffcomment_pipeline_yaml(
-            diffcomment.target_repository,
+    if variant == "manifest-builder":
+        if manifest_builder is None:
+            raise ValueError(
+                "manifest-builder config is required for manifest-builder variant"
+            )
+        return manifest_builder_pipeline_yaml(
+            manifest_builder.repo,
             tag,
             output=output,
             should_publish=should_publish,
+            is_pull_request=is_pull_request,
         )
 
     raise ValueError(f"unknown pipeline variant: {variant}")
+
+
+def is_pull_request_build() -> bool:
+    return os.getenv("BUILDKITE_PULL_REQUEST") not in (None, "", "false")
 
 
 PIPELINE_ARTIFACT = "pipeline.yaml"
@@ -343,19 +378,21 @@ def main() -> None:
         upload_target = tag.split(":", 1)[0]
 
     branch = os.getenv("BUILDKITE_BRANCH", "")
-    if should_publish:
-        logger.info("building on main branch, uploading to %s", upload_target)
-    elif branch:
-        logger.info("building on %s branch, not uploading", branch)
-    else:
-        logger.info("not building on main branch, not uploading")
+    if config.variant != "manifest-builder":
+        if should_publish:
+            logger.info("building on main branch, uploading to %s", upload_target)
+        elif branch:
+            logger.info("building on %s branch, not uploading", branch)
+        else:
+            logger.info("not building on main branch, not uploading")
 
     yaml = pipeline_yaml(
         tag,
         variant=config.variant,
         output=config.output,
         should_publish=should_publish,
-        diffcomment=config.diffcomment,
+        manifest_builder=config.manifest_builder,
+        is_pull_request=is_pull_request_build(),
     )
     if args.dump:
         sys.stdout.write(yaml)
