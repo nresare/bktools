@@ -1,5 +1,4 @@
 import pytest
-import subprocess
 from pathlib import Path
 
 from click.testing import CliRunner
@@ -30,8 +29,12 @@ def test_main_skips_non_pull_request(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "skipping manifest diff comment" in result.stderr
 
 
-def test_main_posts_comment_for_pull_request(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_main_posts_comment_for_pull_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     posted = []
+    input_dir = tmp_path / "output"
+    input_dir.mkdir()
     monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "42")
     monkeypatch.setenv("BUILDKITE_REPO", "git@github.com:nresare/berries-config.git")
     monkeypatch.setattr(
@@ -57,7 +60,7 @@ def test_main_posts_comment_for_pull_request(monkeypatch: pytest.MonkeyPatch) ->
 
     result = CliRunner().invoke(
         diffcomment.main,
-        ["--target-repository", "https://github.com/nresare/manifests.git"],
+        ["--input", str(input_dir)],
     )
 
     assert result.exit_code == 7
@@ -81,9 +84,11 @@ def test_main_posts_comment_for_pull_request(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_main_dumps_comment_body_without_posting(
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     posted = []
+    input_dir = tmp_path / "output"
+    input_dir.mkdir()
     monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "42")
     monkeypatch.setattr(
         diffcomment,
@@ -106,8 +111,8 @@ def test_main_dumps_comment_body_without_posting(
         diffcomment.main,
         [
             "--dump",
-            "--target-repository",
-            "https://github.com/nresare/manifests.git",
+            "--input",
+            str(input_dir),
         ],
     )
 
@@ -129,6 +134,8 @@ def test_main_uploads_full_diff_artifact_when_context_diff_is_omitted(
 ) -> None:
     posted = []
     artifacts = []
+    input_dir = tmp_path / "output"
+    input_dir.mkdir()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "42")
     monkeypatch.setenv("BUILDKITE_REPO", "git@github.com:nresare/berries-config.git")
@@ -159,7 +166,7 @@ def test_main_uploads_full_diff_artifact_when_context_diff_is_omitted(
 
     result = CliRunner().invoke(
         diffcomment.main,
-        ["--target-repository", "https://github.com/nresare/manifests.git"],
+        ["--input", str(input_dir)],
     )
 
     artifact_path = tmp_path / diffcomment.FULL_DIFF_ARTIFACT
@@ -171,7 +178,11 @@ def test_main_uploads_full_diff_artifact_when_context_diff_is_omitted(
     assert posted[0][4].startswith("```\nberries.yaml | 1 +\n```")
 
 
-def test_main_dump_works_outside_pull_request(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_main_dump_works_outside_pull_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    input_dir = tmp_path / "output"
+    input_dir.mkdir()
     monkeypatch.setattr(
         diffcomment,
         "run_manifest_builder_diff",
@@ -185,8 +196,8 @@ def test_main_dump_works_outside_pull_request(monkeypatch: pytest.MonkeyPatch) -
         diffcomment.main,
         [
             "--dump",
-            "--target-repository",
-            "https://github.com/nresare/manifests.git",
+            "--input",
+            str(input_dir),
         ],
     )
 
@@ -195,7 +206,7 @@ def test_main_dump_works_outside_pull_request(monkeypatch: pytest.MonkeyPatch) -
     assert "```diff\ndiff\n```" in result.stdout
 
 
-def test_main_requires_target_repository_for_pull_request(
+def test_main_requires_input_for_pull_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "42")
@@ -203,92 +214,33 @@ def test_main_requires_target_repository_for_pull_request(
     result = CliRunner().invoke(diffcomment.main)
 
     assert result.exit_code == 2
-    assert "requires --target-repository" in result.output
+    assert "requires --input" in result.output
 
 
-def test_run_manifest_builder_diff_clones_target_generates_and_captures_git_diff(
+def test_run_manifest_builder_diff_captures_git_diff(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    manifest_config = tmp_path / "conf"
+    input_dir = tmp_path / "output"
     calls = []
 
-    def fake_run(args: list[str], *, check: bool) -> subprocess.CompletedProcess[str]:
-        calls.append(("run", args[:-1], Path(args[-1]).name, check))
-        return subprocess.CompletedProcess(args, 0)
-
-    def fake_generate(config: Path, output: Path) -> set[Path]:
-        calls.append(("generate", [str(config), output.name], True))
-        return set()
-
     def fake_diff_stat(output: Path) -> str:
-        calls.append(("diff_stat", output.name))
+        calls.append(("diff_stat", output))
         return "diff stat\n"
 
     def fake_diff(output: Path) -> str:
-        calls.append(("diff", output.name))
+        calls.append(("diff", output))
         return "diff output\n"
 
-    monkeypatch.setattr(diffcomment.subprocess, "run", fake_run)
-    monkeypatch.setattr(diffcomment, "generate", fake_generate)
     monkeypatch.setattr(diffcomment, "git_diff_stat", fake_diff_stat)
     monkeypatch.setattr(diffcomment, "git_diff", fake_diff)
 
-    assert diffcomment.run_manifest_builder_diff(
-        target_repository="https://github.com/nresare/manifests.git",
-        manifest_config_dir=manifest_config,
-    ) == (0, diffcomment.ManifestDiff(stat="diff stat\n", diff="diff output\n"))
+    assert diffcomment.run_manifest_builder_diff(input_dir) == (
+        0,
+        diffcomment.ManifestDiff(stat="diff stat\n", diff="diff output\n"),
+    )
     assert calls == [
-        (
-            "run",
-            [
-                "git",
-                "clone",
-                "--depth",
-                "1",
-                "https://github.com/nresare/manifests.git",
-            ],
-            "output",
-            True,
-        ),
-        ("generate", [str(manifest_config), "output"], True),
-        ("diff_stat", "output"),
-        ("diff", "output"),
-    ]
-
-
-def test_run_manifest_builder_diff_uses_current_directory_by_default(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = []
-
-    def fake_run(args: list[str], *, check: bool) -> subprocess.CompletedProcess[str]:
-        calls.append(("run", args[:-1], Path(args[-1]).name, check))
-        return subprocess.CompletedProcess(args, 0)
-
-    def fake_generate(config: Path, output: Path) -> set[Path]:
-        calls.append(("generate", config, output.name))
-        return set()
-
-    def fake_diff_stat(output: Path) -> str:
-        calls.append(("diff_stat", output.name))
-        return "diff stat\n"
-
-    def fake_diff(output: Path) -> str:
-        calls.append(("diff", output.name))
-        return "diff output\n"
-
-    monkeypatch.setattr(diffcomment.subprocess, "run", fake_run)
-    monkeypatch.setattr(diffcomment, "generate", fake_generate)
-    monkeypatch.setattr(diffcomment, "git_diff_stat", fake_diff_stat)
-    monkeypatch.setattr(diffcomment, "git_diff", fake_diff)
-
-    assert diffcomment.run_manifest_builder_diff(
-        target_repository="https://github.com/nresare/manifests.git"
-    ) == (0, diffcomment.ManifestDiff(stat="diff stat\n", diff="diff output\n"))
-    assert calls[-3:] == [
-        ("generate", Path("."), "output"),
-        ("diff_stat", "output"),
-        ("diff", "output"),
+        ("diff_stat", input_dir),
+        ("diff", input_dir),
     ]
 
 

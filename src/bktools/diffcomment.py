@@ -6,7 +6,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -14,7 +13,6 @@ from pathlib import Path
 
 import click
 from manifest_builder import __version__ as MANIFEST_BUILDER_VERSION
-from manifest_builder import generate
 
 
 GITHUB_PROXY_AUDIENCE = "idcat.noa.re"
@@ -22,7 +20,6 @@ GITHUB_PROXY_BASE_URL = "https://idcat.noa.re/proxy"
 GITHUB_API_VERSION = "2026-03-10"
 MAX_COMMENT_CHARS = 65_536
 FULL_DIFF_ARTIFACT = "manifest-builder.diff"
-MANIFEST_CONFIG_DIR = Path(".")
 
 logger = logging.getLogger("diffcomment")
 
@@ -41,15 +38,17 @@ class CommentBody:
 
 @click.command()
 @click.option(
-    "--target-repository",
-    help="Repository to shallow-clone as the manifest output before diff generation.",
+    "--input",
+    "input_dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Generated manifest output checkout to diff.",
 )
 @click.option(
     "--dump",
     is_flag=True,
     help="Write the generated GitHub comment body to stdout instead of posting it.",
 )
-def main(target_repository: str | None, dump: bool) -> None:
+def main(input_dir: Path | None, dump: bool) -> None:
     logging.basicConfig(
         format="%(asctime)s %(levelname)s %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
@@ -68,13 +67,11 @@ def main(target_repository: str | None, dump: bool) -> None:
             )
             return
 
-    if not target_repository:
-        raise click.UsageError(
-            "diffcomment requires --target-repository for pull requests"
-        )
+    if input_dir is None:
+        raise click.UsageError("diffcomment requires --input")
 
     logger.info("running manifest-builder diff for pull request #%s", pr_number)
-    returncode, diff = run_manifest_builder_diff(target_repository)
+    returncode, diff = run_manifest_builder_diff(input_dir)
     logger.info("manifest-builder diff exited with code %s", returncode)
 
     comment = build_comment_body(pr_number, returncode, diff)
@@ -106,25 +103,12 @@ def main(target_repository: str | None, dump: bool) -> None:
 
 
 def run_manifest_builder_diff(
-    target_repository: str,
-    manifest_config_dir: Path = MANIFEST_CONFIG_DIR,
+    input_dir: Path,
 ) -> tuple[int, ManifestDiff]:
-    with tempfile.TemporaryDirectory(prefix="bktools-diffcomment-") as tmpdir:
-        output_dir = Path(tmpdir) / "output"
-        clone_target_repository(target_repository, output_dir)
-        generate(manifest_config_dir, output_dir)
-        diff_stat = git_diff_stat(output_dir)
-        diff_output = git_diff(output_dir)
+    diff_stat = git_diff_stat(input_dir)
+    diff_output = git_diff(input_dir)
 
     return 0, ManifestDiff(stat=diff_stat, diff=diff_output)
-
-
-def clone_target_repository(target_repository: str, output_dir: Path) -> None:
-    logger.info("cloning target repository %s to %s", target_repository, output_dir)
-    subprocess.run(
-        ["git", "clone", "--depth", "1", target_repository, str(output_dir)],
-        check=True,
-    )
 
 
 def git_diff_stat(output_dir: Path) -> str:

@@ -14,6 +14,7 @@ dependencies = [
 pipelinegen = "bktools.pipelinegen:main"
 bktools-image-version-hash = "bktools.image_version_hash:main"
 diffcomment = "bktools.diffcomment:main"
+manifest-builder-on-checkout = "bktools.manifest_builder_on_checkout:main"
 
 [dependency-groups]
 dev = [

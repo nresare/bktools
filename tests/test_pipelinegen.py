@@ -6,10 +6,11 @@ import pytest
 import yaml
 
 from bktools.pipelinegen import (
-    DiffcommentConfig,
+    ManifestBuilderConfig,
     PipelineConfig,
     diffcomment_pipeline_yaml,
     main,
+    manifest_builder_pipeline_yaml,
     pipeline_yaml,
     read_config,
     read_variant,
@@ -121,28 +122,60 @@ def test_diffcomment_pipeline_yaml_posts_manifest_diff_comment() -> None:
     assert "uv pip install --pre --upgrade bktools \\" in pipeline
     assert '--extra-index-url="https://repo.noa.re"' in pipeline
     assert (
-        "uv run diffcomment --target-repository "
-        "https://github.com/nresare/manifests.git"
+        "checkout=$$(uv run manifest-builder-on-checkout --repo "
+        "https://github.com/nresare/manifests.git --no-commit)"
     ) in pipeline
+    assert "uv run diffcomment --input $$checkout" in pipeline
     assert "manifest_builder_main" not in pipeline
 
 
-def test_pipeline_yaml_dispatches_to_diffcomment_variant() -> None:
-    pipeline = pipeline_yaml(
-        variant="diffcomment",
-        diffcomment=DiffcommentConfig(
-            target_repository="https://github.com/nresare/manifests.git"
-        ),
+def test_manifest_builder_pipeline_yaml_runs_on_checkout_script() -> None:
+    pipeline = manifest_builder_pipeline_yaml(
+        "https://github.com/nresare/manifests.git"
     )
+
+    assert "uv venv" in pipeline
+    assert "uv pip install --pre --upgrade bktools \\" in pipeline
+    assert '--extra-index-url="https://repo.noa.re"' in pipeline
     assert (
-        "uv run diffcomment --target-repository "
+        "uv run manifest-builder-on-checkout --repo "
         "https://github.com/nresare/manifests.git"
     ) in pipeline
 
 
-def test_pipeline_yaml_requires_diffcomment_config() -> None:
-    with pytest.raises(ValueError, match="diffcomment config"):
-        pipeline_yaml(variant="diffcomment")
+def test_pipeline_yaml_dispatches_to_manifest_builder_variant() -> None:
+    pipeline = pipeline_yaml(
+        variant="manifest-builder",
+        manifest_builder=ManifestBuilderConfig(
+            repo="https://github.com/nresare/manifests.git"
+        ),
+    )
+
+    assert (
+        "uv run manifest-builder-on-checkout --repo "
+        "https://github.com/nresare/manifests.git"
+    ) in pipeline
+
+
+def test_pipeline_yaml_dispatches_manifest_builder_pr_to_diffcomment() -> None:
+    pipeline = pipeline_yaml(
+        variant="manifest-builder",
+        manifest_builder=ManifestBuilderConfig(
+            repo="https://github.com/nresare/manifests.git"
+        ),
+        is_pull_request=True,
+    )
+
+    assert (
+        "checkout=$$(uv run manifest-builder-on-checkout --repo "
+        "https://github.com/nresare/manifests.git --no-commit)"
+    ) in pipeline
+    assert "uv run diffcomment --input $$checkout" in pipeline
+
+
+def test_pipeline_yaml_requires_manifest_builder_config() -> None:
+    with pytest.raises(ValueError, match="manifest-builder config"):
+        pipeline_yaml(variant="manifest-builder")
 
 
 def test_pipeline_yaml_requires_tag_for_container_output() -> None:
@@ -157,28 +190,26 @@ def test_read_config_loads_variant_and_output_from_config(tmp_path: Path) -> Non
     assert read_config(config_path) == PipelineConfig(variant="uv", output="container")
 
 
-def test_read_config_accepts_diffcomment_variant(tmp_path: Path) -> None:
+def test_read_config_accepts_manifest_builder_repo(tmp_path: Path) -> None:
     config_path = tmp_path / "pipelinegen.toml"
     config_path.write_text(
-        'variant = "diffcomment"\n'
-        "\n"
-        "[[diffcomment]]\n"
-        'target_repository = "https://github.com/nresare/manifests.git"\n'
+        'variant = "manifest-builder"\n'
+        'repo = "https://github.com/nresare/manifests.git"\n'
     )
 
     assert read_config(config_path) == PipelineConfig(
-        variant="diffcomment",
-        diffcomment=DiffcommentConfig(
-            target_repository="https://github.com/nresare/manifests.git"
+        variant="manifest-builder",
+        manifest_builder=ManifestBuilderConfig(
+            repo="https://github.com/nresare/manifests.git"
         ),
     )
 
 
-def test_read_config_requires_diffcomment_target_repository(tmp_path: Path) -> None:
+def test_read_config_requires_manifest_builder_repo(tmp_path: Path) -> None:
     config_path = tmp_path / "pipelinegen.toml"
-    config_path.write_text('variant = "diffcomment"\n[[diffcomment]]\n')
+    config_path.write_text('variant = "manifest-builder"\n')
 
-    with pytest.raises(SystemExit, match="target_repository"):
+    with pytest.raises(SystemExit, match="repo"):
         read_config(config_path)
 
 
@@ -209,6 +240,14 @@ def test_read_variant_rejects_unknown_variant(tmp_path: Path) -> None:
         read_variant(config_path)
 
 
+def test_read_variant_rejects_removed_diffcomment_variant(tmp_path: Path) -> None:
+    config_path = tmp_path / "pipelinegen.toml"
+    config_path.write_text('variant = "diffcomment"\n')
+
+    with pytest.raises(SystemExit, match="unsupported variant 'diffcomment'"):
+        read_variant(config_path)
+
+
 def test_main_uses_config_variant_and_logs_publish_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -229,30 +268,6 @@ def test_main_uses_config_variant_and_logs_publish_target(
         captured.err,
     )
     assert "building on main branch, uploading to nresare/python" in captured.err
-
-
-def test_main_passes_diffcomment_target_repository(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    config_dir = tmp_path / ".buildkite"
-    config_dir.mkdir()
-    (config_dir / "pipelinegen.toml").write_text(
-        'variant = "diffcomment"\n'
-        "\n"
-        "[[diffcomment]]\n"
-        'target_repository = "https://github.com/nresare/manifests.git"\n'
-    )
-    monkeypatch.setattr(
-        "sys.argv", ["pipelinegen", "--dump", "--repo-root", str(tmp_path)]
-    )
-
-    main()
-
-    captured = capsys.readouterr()
-    assert (
-        "uv run diffcomment --target-repository "
-        "https://github.com/nresare/manifests.git"
-    ) in captured.out
 
 
 def test_main_uses_uv_container_output_and_logs_docker_target(
@@ -280,6 +295,79 @@ def test_main_uses_uv_container_output_and_logs_docker_target(
         "command: docker buildx build -t example-app:0.1.0-deadbeef ." in captured.out
     )
     assert "building on main branch, uploading to example-app" in captured.err
+
+
+def test_main_passes_manifest_builder_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_dir = tmp_path / ".buildkite"
+    config_dir.mkdir()
+    (config_dir / "pipelinegen.toml").write_text(
+        'variant = "manifest-builder"\n'
+        'repo = "https://github.com/nresare/manifests.git"\n'
+    )
+    monkeypatch.setattr(
+        "sys.argv", ["pipelinegen", "--dump", "--repo-root", str(tmp_path)]
+    )
+    monkeypatch.setenv("BUILDKITE_BRANCH", "main")
+
+    main()
+
+    captured = capsys.readouterr()
+    assert (
+        "uv run manifest-builder-on-checkout --repo "
+        "https://github.com/nresare/manifests.git"
+    ) in captured.out
+    assert "uploading to https://github.com/nresare/manifests.git" not in captured.err
+    assert "not uploading" not in captured.err
+
+
+def test_main_uses_diffcomment_for_manifest_builder_pull_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_dir = tmp_path / ".buildkite"
+    config_dir.mkdir()
+    (config_dir / "pipelinegen.toml").write_text(
+        'variant = "manifest-builder"\n'
+        'repo = "https://github.com/nresare/manifests.git"\n'
+    )
+    monkeypatch.setattr(
+        "sys.argv", ["pipelinegen", "--dump", "--repo-root", str(tmp_path)]
+    )
+    monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "42")
+
+    main()
+
+    captured = capsys.readouterr()
+    assert (
+        "checkout=$$(uv run manifest-builder-on-checkout --repo "
+        "https://github.com/nresare/manifests.git --no-commit)"
+    ) in captured.out
+    assert "uv run diffcomment --input $$checkout" in captured.out
+
+
+def test_main_uses_checkout_for_manifest_builder_when_pull_request_is_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_dir = tmp_path / ".buildkite"
+    config_dir.mkdir()
+    (config_dir / "pipelinegen.toml").write_text(
+        'variant = "manifest-builder"\n'
+        'repo = "https://github.com/nresare/manifests.git"\n'
+    )
+    monkeypatch.setattr(
+        "sys.argv", ["pipelinegen", "--dump", "--repo-root", str(tmp_path)]
+    )
+    monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "false")
+
+    main()
+
+    captured = capsys.readouterr()
+    assert (
+        "uv run manifest-builder-on-checkout --repo "
+        "https://github.com/nresare/manifests.git"
+    ) in captured.out
+    assert "uv run diffcomment" not in captured.out
 
 
 def test_upload_pipeline_invokes_buildkite_agent(
