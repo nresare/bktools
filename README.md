@@ -28,7 +28,11 @@ uv run pytest
     GitHub PR comment through the configured GitHub API proxy. Requires a
     `[[diffcomment]]` table with `target_repository`. `pipelinegen` passes that
     value to `diffcomment --target-repository`, and `diffcomment` shallow-clones
-    it as the manifest output repository before diff generation.
+    it as the manifest output repository before diff generation. Use
+    `diffcomment --dump --target-repository <repo>` to write the generated
+    comment body to stdout for local testing. If the context diff is too long
+    for a GitHub comment, `diffcomment` uploads the full diff as a Buildkite
+    artifact.
 
     ```toml
     variant = "diffcomment"
