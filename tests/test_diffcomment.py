@@ -67,15 +67,15 @@ def test_main_posts_comment_for_pull_request(monkeypatch: pytest.MonkeyPatch) ->
             "nresare",
             "berries-config",
             "42",
-            "### `manifest-builder diff`\n\n"
-            "Exit code: `7`\n\n"
             "```\n"
             "berries.yaml | 2 +-\n"
             " 1 file changed, 1 insertion(+), 1 deletion(-)\n"
             "```\n\n"
             "```diff\n"
             "diff\n"
-            "```",
+            "```\n\n"
+            f"manifest-builder version: `{diffcomment.MANIFEST_BUILDER_VERSION}`\n"
+            "Exit code: `7`",
         )
     ]
 
@@ -113,13 +113,13 @@ def test_main_dumps_comment_body_without_posting(
 
     assert result.exit_code == 0
     assert result.stdout == (
-        "### `manifest-builder diff`\n\n"
         "```\n"
         "berries.yaml | 1 +\n"
         "```\n\n"
         "```diff\n"
         "diff\n"
-        "```\n"
+        "```\n\n"
+        f"manifest-builder version: `{diffcomment.MANIFEST_BUILDER_VERSION}`\n"
     )
     assert posted == []
 
@@ -168,6 +168,7 @@ def test_main_uploads_full_diff_artifact_when_context_diff_is_omitted(
     assert artifacts == [tmp_path]
     assert diffcomment.FULL_DIFF_ARTIFACT in posted[0][4]
     assert "```diff" not in posted[0][4]
+    assert posted[0][4].startswith("```\nberries.yaml | 1 +\n```")
 
 
 def test_main_dump_works_outside_pull_request(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -309,7 +310,7 @@ def test_github_repo_prefers_pull_request_repo(
     assert diffcomment.github_repo() == ("fork", "source")
 
 
-def test_build_comment_body_includes_build_metadata(
+def test_build_comment_body_excludes_build_metadata_and_includes_version(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("BUILDKITE_BUILD_URL", "https://buildkite.example/build")
@@ -322,10 +323,15 @@ def test_build_comment_body_includes_build_metadata(
     )
 
     assert "Pull request:" not in comment.body
-    assert "Build: https://buildkite.example/build" in comment.body
-    assert "Commit: `abc123`" in comment.body
+    assert "### `manifest-builder diff`" not in comment.body
+    assert "Build: https://buildkite.example/build" not in comment.body
+    assert "Commit: `abc123`" not in comment.body
     assert "file.yaml | 1 +" in comment.body
     assert "````diff\n```diff\n+hello\n```\n````" in comment.body
+    assert (
+        f"manifest-builder version: `{diffcomment.MANIFEST_BUILDER_VERSION}`"
+        in comment.body
+    )
     assert not comment.omitted_context_diff
 
 
@@ -336,6 +342,10 @@ def test_build_comment_body_uses_placeholder_for_empty_output() -> None:
 
     assert (
         "The generated output is the same before and after this change" in comment.body
+    )
+    assert (
+        f"manifest-builder version: `{diffcomment.MANIFEST_BUILDER_VERSION}`"
+        in comment.body
     )
     assert not comment.omitted_context_diff
 

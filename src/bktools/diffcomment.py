@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import click
+from manifest_builder import __version__ as MANIFEST_BUILDER_VERSION
 from manifest_builder import generate
 
 
@@ -199,35 +200,25 @@ def request_github_proxy_token() -> str:
 def build_comment_body(
     pr_number: str, returncode: int, diff: ManifestDiff
 ) -> CommentBody:
-    build_url = os.environ.get("BUILDKITE_BUILD_URL")
-    commit = os.environ.get("BUILDKITE_COMMIT")
-
     del pr_number
 
-    lines = ["### `manifest-builder diff`"]
-    metadata = []
+    metadata = [f"manifest-builder version: `{MANIFEST_BUILDER_VERSION}`"]
 
-    if build_url:
-        metadata.append(f"Build: {build_url}")
-    if commit:
-        metadata.append(f"Commit: `{commit}`")
     if returncode:
         metadata.append(f"Exit code: `{returncode}`")
-
-    if metadata:
-        lines.extend(["", *metadata])
 
     stat = diff.stat.strip()
     context_diff = diff.diff.strip()
     if not stat and not context_diff:
-        lines.extend(
-            ["", "The generated output is the same before and after this change"]
-        )
+        lines = ["The generated output is the same before and after this change"]
+        if metadata:
+            lines.extend(["", *metadata])
         return CommentBody(body="\n".join(lines), omitted_context_diff=False)
 
+    lines = []
     if stat:
         stat_fence = markdown_fence(stat)
-        lines.extend(["", stat_fence, stat, stat_fence])
+        lines.extend([stat_fence, stat, stat_fence])
 
     body_with_context = "\n".join(
         [
@@ -236,6 +227,8 @@ def build_comment_body(
             f"{markdown_fence(context_diff)}diff",
             context_diff,
             markdown_fence(context_diff),
+            "",
+            *metadata,
         ]
     )
     if len(body_with_context) <= MAX_COMMENT_CHARS:
@@ -249,6 +242,8 @@ def build_comment_body(
                 "_The full context diff is too large for a GitHub comment and "
                 f"has been uploaded as Buildkite artifact `{FULL_DIFF_ARTIFACT}`._"
             ),
+            "",
+            *metadata,
         ]
     )
     return CommentBody(body=body_without_context, omitted_context_diff=True)
