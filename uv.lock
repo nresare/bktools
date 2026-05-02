@@ -21,7 +21,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.3.3" },
-    { name = "manifest-builder", specifier = ">=0.4.0" },
+    { name = "manifest-builder", specifier = ">=0.4.1.dev18" },
     { name = "pyyaml", specifier = ">=6.0.3" },
 ]
 
@@ -64,7 +64,7 @@ wheels = [
 
 [[package]]
 name = "manifest-builder"
-version = "0.4.1.dev17+gf08bb834b"
+version = "0.4.1.dev18+ge159b20d1"
 source = { registry = "https://repo.noa.re/" }
 dependencies = [
     { name = "click" },
@@ -72,7 +72,7 @@ dependencies = [
     { name = "pyyaml" },
 ]
 wheels = [
-    { url = "https://repo.noa.re/manifest-builder/manifest_builder-0.4.1.dev17%2Bgf08bb834b-py3-none-any.whl", hash = "sha256:9744ed61d6ca20a3b35e262b1101b317d300389762c7c6687696ed28401b7c7a", size = 38412 },
+    { url = "https://repo.noa.re/manifest-builder/manifest_builder-0.4.1.dev18%2Bge159b20d1-py3-none-any.whl", hash = "sha256:5e9edf656cb294564c1202076b864e25fa982d63dd6168d586a7089d1bacb72b", size = 38463 },
 ]
 
 [[package]]

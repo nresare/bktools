@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "click>=8.3.3",
-    "manifest-builder>=0.4.0",
+    "manifest-builder>=0.4.1.dev18",
     "pyyaml>=6.0.3",
 ]
 

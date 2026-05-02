@@ -9,23 +9,33 @@ import sys
 import tempfile
 import urllib.error
 import urllib.request
-from collections.abc import Callable
-from contextlib import redirect_stderr, redirect_stdout
-from importlib import import_module
-from io import StringIO
+from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 
 import click
+from manifest_builder import generate
 
 
 GITHUB_PROXY_AUDIENCE = "idcat.noa.re"
 GITHUB_PROXY_BASE_URL = "https://idcat.noa.re/proxy"
 GITHUB_API_VERSION = "2026-03-10"
-MAX_COMMENT_BYTES = 60_000
-MANIFEST_CONFIG_DIR = Path("conf")
+MAX_COMMENT_CHARS = 65_536
+FULL_DIFF_ARTIFACT = "manifest-builder.diff"
+MANIFEST_CONFIG_DIR = Path(".")
 
 logger = logging.getLogger("diffcomment")
+
+
+@dataclass(frozen=True)
+class ManifestDiff:
+    stat: str
+    diff: str
+
+
+@dataclass(frozen=True)
+class CommentBody:
+    body: str
+    omitted_context_diff: bool
 
 
 @click.command()
@@ -33,7 +43,12 @@ logger = logging.getLogger("diffcomment")
     "--target-repository",
     help="Repository to shallow-clone as the manifest output before diff generation.",
 )
-def main(target_repository: str | None) -> None:
+@click.option(
+    "--dump",
+    is_flag=True,
+    help="Write the generated GitHub comment body to stdout instead of posting it.",
+)
+def main(target_repository: str | None, dump: bool) -> None:
     logging.basicConfig(
         format="%(asctime)s %(levelname)s %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
@@ -44,10 +59,13 @@ def main(target_repository: str | None) -> None:
 
     pr_number = os.environ.get("BUILDKITE_PULL_REQUEST")
     if not pr_number or pr_number == "false":
-        logger.info(
-            "skipping manifest diff comment because this build was not triggered by a pull request"
-        )
-        return
+        if dump:
+            pr_number = "local"
+        else:
+            logger.info(
+                "skipping manifest diff comment because this build was not triggered by a pull request"
+            )
+            return
 
     if not target_repository:
         raise click.UsageError(
@@ -55,21 +73,32 @@ def main(target_repository: str | None) -> None:
         )
 
     logger.info("running manifest-builder diff for pull request #%s", pr_number)
-    returncode, output = run_manifest_builder_diff(target_repository)
+    returncode, diff = run_manifest_builder_diff(target_repository)
     logger.info("manifest-builder diff exited with code %s", returncode)
+
+    comment = build_comment_body(pr_number, returncode, diff)
+    if dump:
+        logger.info(
+            "writing manifest diff comment body to stdout instead of posting to GitHub"
+        )
+        click.echo(comment.body)
+        raise click.exceptions.Exit(returncode)
+
+    if comment.omitted_context_diff:
+        write_full_diff_artifact(Path.cwd(), diff)
+        upload_full_diff_artifact(Path.cwd())
 
     owner, repo = github_repo()
     logger.info("requesting GitHub API proxy token for GitHub comment")
     token = request_github_proxy_token()
 
-    body = build_comment_body(pr_number, returncode, output)
     logger.info(
         "posting manifest diff comment to %s/%s pull request #%s",
         owner,
         repo,
         pr_number,
     )
-    post_issue_comment(token, owner, repo, pr_number, body)
+    post_issue_comment(token, owner, repo, pr_number, comment.body)
     logger.info("posted manifest diff comment")
 
     raise click.exceptions.Exit(returncode)
@@ -78,35 +107,15 @@ def main(target_repository: str | None) -> None:
 def run_manifest_builder_diff(
     target_repository: str,
     manifest_config_dir: Path = MANIFEST_CONFIG_DIR,
-) -> tuple[int, str]:
-    output = StringIO()
-    try:
-        with redirect_stdout(output), redirect_stderr(output):
-            result = run_manifest_builder_show_diff(
-                target_repository, manifest_config_dir
-            )
-    except SystemExit as error:
-        returncode = int(error.code) if isinstance(error.code, int) else 1
-    else:
-        returncode = int(result) if isinstance(result, int) else 0
-
-    return returncode, output.getvalue()
-
-
-def run_manifest_builder_show_diff(
-    target_repository: str,
-    manifest_config_dir: Path = MANIFEST_CONFIG_DIR,
-) -> int:
+) -> tuple[int, ManifestDiff]:
     with tempfile.TemporaryDirectory(prefix="bktools-diffcomment-") as tmpdir:
         output_dir = Path(tmpdir) / "output"
         clone_target_repository(target_repository, output_dir)
-        diff_output = manifest_builder_show_diff(manifest_config_dir, output_dir)
+        generate(manifest_config_dir, output_dir)
+        diff_stat = git_diff_stat(output_dir)
+        diff_output = git_diff(output_dir)
 
-    if diff_output:
-        print(diff_output, end="")
-    else:
-        print("The output is identical before and after this change")
-    return 0
+    return 0, ManifestDiff(stat=diff_stat, diff=diff_output)
 
 
 def clone_target_repository(target_repository: str, output_dir: Path) -> None:
@@ -117,11 +126,54 @@ def clone_target_repository(target_repository: str, output_dir: Path) -> None:
     )
 
 
-def manifest_builder_show_diff(config: Path, output: Path) -> str:
-    module = import_module("manifest_builder.cli")
-    show_diff = cast(Callable[[Path, Path], str], getattr(module, "show_diff"))
+def git_diff_stat(output_dir: Path) -> str:
+    result = subprocess.run(
+        ["git", "diff", "--stat"],
+        cwd=output_dir,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return result.stdout
 
-    return show_diff(config, output)
+
+def git_diff(output_dir: Path) -> str:
+    result = subprocess.run(
+        ["git", "diff"],
+        cwd=output_dir,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return result.stdout
+
+
+def write_full_diff_artifact(repo_root: Path, diff: ManifestDiff) -> Path:
+    artifact_path = repo_root / FULL_DIFF_ARTIFACT
+    logger.info("writing full manifest diff to %s", artifact_path)
+    artifact_path.write_text(render_full_diff_artifact(diff))
+    return artifact_path
+
+
+def render_full_diff_artifact(diff: ManifestDiff) -> str:
+    if not diff.stat.strip() and not diff.diff.strip():
+        return "The generated output is the same before and after this change\n"
+
+    sections = []
+    if diff.stat.strip():
+        sections.append(diff.stat.strip())
+    if diff.diff.strip():
+        sections.append(diff.diff.strip())
+    return "\n\n".join(sections) + "\n"
+
+
+def upload_full_diff_artifact(repo_root: Path) -> None:
+    logger.info("uploading full manifest diff artifact %s", FULL_DIFF_ARTIFACT)
+    subprocess.run(
+        ["buildkite-agent", "artifact", "upload", FULL_DIFF_ARTIFACT],
+        cwd=repo_root,
+        check=True,
+    )
 
 
 def github_repo() -> tuple[str, str]:
@@ -144,28 +196,62 @@ def request_github_proxy_token() -> str:
     ).strip()
 
 
-def build_comment_body(pr_number: str, returncode: int, output: str) -> str:
+def build_comment_body(
+    pr_number: str, returncode: int, diff: ManifestDiff
+) -> CommentBody:
     build_url = os.environ.get("BUILDKITE_BUILD_URL")
     commit = os.environ.get("BUILDKITE_COMMIT")
 
-    lines = [
-        "### `manifest-builder diff`",
-        "",
-        f"Pull request: #{pr_number}",
-    ]
+    del pr_number
+
+    lines = ["### `manifest-builder diff`"]
+    metadata = []
 
     if build_url:
-        lines.append(f"Build: {build_url}")
+        metadata.append(f"Build: {build_url}")
     if commit:
-        lines.append(f"Commit: `{commit}`")
+        metadata.append(f"Commit: `{commit}`")
     if returncode:
-        lines.append(f"Exit code: `{returncode}`")
+        metadata.append(f"Exit code: `{returncode}`")
 
-    diff_output = output.strip() or "No diff output produced."
-    fence = markdown_fence(diff_output)
-    lines.extend(["", f"{fence}diff", diff_output, fence])
+    if metadata:
+        lines.extend(["", *metadata])
 
-    return truncate_comment("\n".join(lines))
+    stat = diff.stat.strip()
+    context_diff = diff.diff.strip()
+    if not stat and not context_diff:
+        lines.extend(
+            ["", "The generated output is the same before and after this change"]
+        )
+        return CommentBody(body="\n".join(lines), omitted_context_diff=False)
+
+    if stat:
+        stat_fence = markdown_fence(stat)
+        lines.extend(["", stat_fence, stat, stat_fence])
+
+    body_with_context = "\n".join(
+        [
+            *lines,
+            "",
+            f"{markdown_fence(context_diff)}diff",
+            context_diff,
+            markdown_fence(context_diff),
+        ]
+    )
+    if len(body_with_context) <= MAX_COMMENT_CHARS:
+        return CommentBody(body=body_with_context, omitted_context_diff=False)
+
+    body_without_context = "\n".join(
+        [
+            *lines,
+            "",
+            (
+                "_The full context diff is too large for a GitHub comment and "
+                f"has been uploaded as Buildkite artifact `{FULL_DIFF_ARTIFACT}`._"
+            ),
+        ]
+    )
+    return CommentBody(body=body_without_context, omitted_context_diff=True)
 
 
 def markdown_fence(text: str) -> str:
@@ -173,17 +259,6 @@ def markdown_fence(text: str) -> str:
         (len(match.group(0)) for match in re.finditer(r"`+", text)), default=0
     )
     return "`" * max(3, longest_backtick_run + 1)
-
-
-def truncate_comment(body: str) -> str:
-    encoded = body.encode()
-    if len(encoded) <= MAX_COMMENT_BYTES:
-        return body
-
-    suffix = "\n\n_Output truncated to fit within the GitHub comment size limit._"
-    allowed_bytes = MAX_COMMENT_BYTES - len(suffix.encode())
-    truncated = encoded[:allowed_bytes].decode(errors="ignore").rstrip()
-    return f"{truncated}{suffix}"
 
 
 def post_issue_comment(
