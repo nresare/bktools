@@ -155,7 +155,7 @@ def render_full_diff_artifact(diff: ManifestDiff) -> str:
 
     sections = []
     if diff.stat.strip():
-        sections.append(diff.stat.strip())
+        sections.append(diff.stat.rstrip())
     if diff.diff.strip():
         sections.append(diff.diff.strip())
     return "\n\n".join(sections) + "\n"
@@ -200,7 +200,7 @@ def build_comment_body(
     if returncode:
         metadata.append(f"Exit code: `{returncode}`")
 
-    stat = diff.stat.strip()
+    stat = diff.stat.rstrip()
     context_diff = diff.diff.strip()
     if not stat and not context_diff:
         lines = ["The generated output is the same before and after this change"]
