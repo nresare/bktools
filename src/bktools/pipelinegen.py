@@ -259,7 +259,7 @@ def manifest_builder_pipeline_yaml(
             "manifest-builder invocation was not from a pr or on the main branch, "
             "so no additional pipeline steps are needed"
         )
-        return render_pipeline_yaml({"steps": []})
+        return EMPTY_PIPELINE_YAML
 
     return render_pipeline_yaml(
         {
@@ -323,6 +323,7 @@ def is_pull_request_build() -> bool:
 
 
 PIPELINE_ARTIFACT = "pipeline.yaml"
+EMPTY_PIPELINE_YAML = render_pipeline_yaml({"steps": []})
 
 
 def write_pipeline_artifact(repo_root: Path, yaml: str) -> Path:
@@ -403,6 +404,9 @@ def main() -> None:
     )
     if args.dump:
         sys.stdout.write(yaml)
+        return
+
+    if yaml == EMPTY_PIPELINE_YAML:
         return
 
     write_pipeline_artifact(repo_root, yaml)

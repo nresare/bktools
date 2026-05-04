@@ -374,6 +374,38 @@ def test_main_skips_manifest_builder_when_not_pull_request_or_main(
     ) in captured.err
 
 
+def test_main_does_not_upload_manifest_builder_when_no_steps_are_needed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_dir = tmp_path / ".buildkite"
+    config_dir.mkdir()
+    (config_dir / "pipelinegen.toml").write_text(
+        'variant = "manifest-builder"\n'
+        'repo = "https://github.com/nresare/manifests.git"\n'
+    )
+    uploaded = []
+    uploaded_artifacts = []
+    monkeypatch.setattr("sys.argv", ["pipelinegen", "--repo-root", str(tmp_path)])
+    monkeypatch.setattr("bktools.pipelinegen.upload_pipeline", uploaded.append)
+    monkeypatch.setattr(
+        "bktools.pipelinegen.upload_pipeline_artifact", uploaded_artifacts.append
+    )
+    monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "false")
+    monkeypatch.setenv("BUILDKITE_BRANCH", "feature-branch")
+
+    main()
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert uploaded == []
+    assert uploaded_artifacts == []
+    assert not (tmp_path / "pipeline.yaml").exists()
+    assert (
+        "manifest-builder invocation was not from a pr or on the main branch, "
+        "so no additional pipeline steps are needed"
+    ) in captured.err
+
+
 def test_upload_pipeline_invokes_buildkite_agent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
