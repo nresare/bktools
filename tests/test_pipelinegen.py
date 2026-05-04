@@ -361,6 +361,7 @@ def test_main_skips_manifest_builder_when_not_pull_request_or_main(
         "sys.argv", ["pipelinegen", "--dump", "--repo-root", str(tmp_path)]
     )
     monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "false")
+    monkeypatch.setenv("BUILDKITE_BRANCH", "feature-branch")
 
     main()
 
