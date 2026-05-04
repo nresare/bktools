@@ -250,9 +250,16 @@ def manifest_builder_pipeline_yaml(
     should_publish: bool = False,
     is_pull_request: bool = False,
 ) -> str:
-    del tag, output, should_publish
+    del tag, output
     if is_pull_request:
         return diffcomment_pipeline_yaml(repo)
+
+    if not should_publish:
+        logger.info(
+            "manifest-builder invocation was not from a pr or on the main branch, "
+            "so no additional pipeline steps are needed"
+        )
+        return render_pipeline_yaml({"steps": []})
 
     return render_pipeline_yaml(
         {
