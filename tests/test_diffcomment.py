@@ -336,6 +336,21 @@ def test_build_comment_body_uses_placeholder_for_empty_output() -> None:
     assert not comment.omitted_context_diff
 
 
+def test_build_comment_body_preserves_stat_leading_alignment() -> None:
+    comment = diffcomment.build_comment_body(
+        "12",
+        0,
+        diffcomment.ManifestDiff(
+            stat=" file.yaml | 1 +\n 1 file changed, 1 insertion(+)\n",
+            diff="diff",
+        ),
+    )
+
+    assert comment.body.startswith(
+        "```\n file.yaml | 1 +\n 1 file changed, 1 insertion(+)\n```"
+    )
+
+
 def test_build_comment_body_omits_context_diff_when_too_large() -> None:
     comment = diffcomment.build_comment_body(
         "12",
