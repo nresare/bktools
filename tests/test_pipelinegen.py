@@ -131,7 +131,8 @@ def test_diffcomment_pipeline_yaml_posts_manifest_diff_comment() -> None:
 
 def test_manifest_builder_pipeline_yaml_runs_on_checkout_script() -> None:
     pipeline = manifest_builder_pipeline_yaml(
-        "https://github.com/nresare/manifests.git"
+        "https://github.com/nresare/manifests.git",
+        should_publish=True,
     )
 
     assert "uv venv" in pipeline
@@ -149,6 +150,7 @@ def test_pipeline_yaml_dispatches_to_manifest_builder_variant() -> None:
         manifest_builder=ManifestBuilderConfig(
             repo="https://github.com/nresare/manifests.git"
         ),
+        should_publish=True,
     )
 
     assert (
@@ -346,7 +348,7 @@ def test_main_uses_diffcomment_for_manifest_builder_pull_request(
     assert "uv run diffcomment --input $$checkout" in captured.out
 
 
-def test_main_uses_checkout_for_manifest_builder_when_pull_request_is_false(
+def test_main_skips_manifest_builder_when_not_pull_request_or_main(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     config_dir = tmp_path / ".buildkite"
@@ -363,11 +365,12 @@ def test_main_uses_checkout_for_manifest_builder_when_pull_request_is_false(
     main()
 
     captured = capsys.readouterr()
-    assert (
-        "uv run manifest-builder-on-checkout --repo "
-        "https://github.com/nresare/manifests.git"
-    ) in captured.out
+    assert captured.out == "steps: []\n"
     assert "uv run diffcomment" not in captured.out
+    assert (
+        "manifest-builder invocation was not from a pr or on the main branch, "
+        "so no additional pipeline steps are needed"
+    ) in captured.err
 
 
 def test_upload_pipeline_invokes_buildkite_agent(
