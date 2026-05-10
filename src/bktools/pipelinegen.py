@@ -9,7 +9,7 @@ import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 
@@ -20,6 +20,7 @@ PipelineOutput = str | None
 VALID_VARIANTS = ("rust", "uv", "manifest-builder", "rust-container")
 VALID_OUTPUTS = ("container",)
 PYTHON_PACKAGE_REGISTRY = "nresare/python"
+DEFAULT_AGENTS = {"speed": "fast"}
 
 logger = logging.getLogger("pipelinegen")
 
@@ -120,12 +121,41 @@ def read_variant(config_path: Path) -> PipelineVariant:
 
 
 def render_pipeline_yaml(pipeline: dict[str, object]) -> str:
+    pipeline = apply_default_agents(pipeline)
     return yaml.dump(
         pipeline,
         Dumper=PipelineYamlDumper,
         sort_keys=False,
         default_flow_style=False,
     )
+
+
+def apply_default_agents(pipeline: dict[str, object]) -> dict[str, object]:
+    steps = pipeline.get("steps")
+    if not isinstance(steps, list):
+        return pipeline
+
+    normalized_steps = []
+    for step in steps:
+        if not isinstance(step, dict):
+            normalized_steps.append(step)
+            continue
+
+        step_dict = cast(dict[str, object], step)
+        agents = step_dict.get("agents")
+        agent_tags = cast(dict[str, object], agents) if isinstance(agents, dict) else {}
+        if agent_tags.get("arch") == "arm64":
+            normalized_steps.append(step_dict)
+            continue
+
+        normalized_step = step_dict.copy()
+        normalized_step["agents"] = {
+            **agent_tags,
+            **DEFAULT_AGENTS,
+        }
+        normalized_steps.append(normalized_step)
+
+    return {**pipeline, "steps": normalized_steps}
 
 
 def docker_image_publish_step(tag: str, depends_on: str) -> dict[str, object]:

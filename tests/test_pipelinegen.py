@@ -38,11 +38,18 @@ def assert_docker_publish_step(
     ]
 
 
+def assert_fast_agent_step(pipeline: str, step_index: int = 0) -> None:
+    parsed = yaml.safe_load(pipeline)
+
+    assert parsed["steps"][step_index]["agents"] == {"speed": "fast"}
+
+
 def test_pipeline_yaml_without_publish_contains_test_step_only() -> None:
     pipeline = pipeline_yaml("example-app:0.1.0-deadbeef", variant="rust-container")
 
     assert "key: test" in pipeline
     assert "docker buildx build" not in pipeline
+    assert_fast_agent_step(pipeline)
 
 
 def test_pipeline_yaml_with_publish_adds_docker_push_step() -> None:
@@ -52,6 +59,7 @@ def test_pipeline_yaml_with_publish_adds_docker_push_step() -> None:
         should_publish=True,
     )
 
+    assert_fast_agent_step(pipeline)
     assert_docker_publish_step(pipeline, depends_on="test")
 
 
@@ -71,6 +79,7 @@ def test_uv_pipeline_yaml_without_publish_contains_test_and_build_step_only() ->
     parsed = yaml.safe_load(pipeline)
 
     assert parsed["steps"][0]["label"] == ":test_tube: Test and Build"
+    assert parsed["steps"][0]["agents"] == {"speed": "fast"}
     assert "uv build --wheel" in pipeline
     assert "publish-to-packages" not in pipeline
     assert "branches: main" not in pipeline
@@ -79,6 +88,7 @@ def test_uv_pipeline_yaml_without_publish_contains_test_and_build_step_only() ->
 def test_uv_pipeline_yaml_with_publish_adds_publish_commands() -> None:
     pipeline = uv_pipeline_yaml(should_publish=True)
 
+    assert_fast_agent_step(pipeline)
     assert (
         "export UV_PUBLISH_TOKEN=$$(buildkite-agent oidc request-token --audience repo.noa.re)"
         in pipeline
@@ -100,6 +110,7 @@ def test_uv_pipeline_with_container_output_uses_uv_steps_and_docker_publish() ->
     assert "uv run pytest" in pipeline
     assert "uv build --wheel" in pipeline
     assert "uv run ty check" in pipeline
+    assert_fast_agent_step(pipeline)
     assert_docker_publish_step(pipeline, depends_on="test-and-build")
     assert "uv publish" not in pipeline
     assert "publish-to-packages" not in pipeline
@@ -125,6 +136,7 @@ def test_pipeline_yaml_dispatches_to_uv_variant_without_tag() -> None:
 
 def test_diffcomment_pipeline_yaml_posts_manifest_diff_comment() -> None:
     pipeline = diffcomment_pipeline_yaml("https://github.com/nresare/manifests.git")
+    assert_fast_agent_step(pipeline)
     assert "uv venv" in pipeline
     assert "uv pip install --pre --upgrade bktools \\" in pipeline
     assert '--extra-index-url="https://repo.noa.re"' in pipeline
@@ -142,6 +154,7 @@ def test_manifest_builder_pipeline_yaml_runs_on_checkout_script() -> None:
         should_publish=True,
     )
 
+    assert_fast_agent_step(pipeline)
     assert "uv venv" in pipeline
     assert "uv pip install --pre --upgrade bktools \\" in pipeline
     assert '--extra-index-url="https://repo.noa.re"' in pipeline
