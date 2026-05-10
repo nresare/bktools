@@ -129,21 +129,16 @@ def render_pipeline_yaml(pipeline: dict[str, object]) -> str:
 
 
 def docker_image_publish_step(tag: str, depends_on: str) -> dict[str, object]:
-    image_name, image_tag = tag.split(":", 1)
+    repo = "repo.noa.re"
     return {
         "label": ":whale: build docker image",
         "depends_on": depends_on,
         "agents": {"arch": "arm64"},
-        "command": f"docker buildx build -t {tag} .",
-        "plugins": [
-            {
-                "docker-image-push#v1.1.0": {
-                    "buildkite": {"auth-method": "oidc"},
-                    "image": image_name,
-                    "provider": "buildkite",
-                    "tag": image_tag,
-                }
-            }
+        "commands": [
+            f"docker buildx build -t {repo}/{tag} .",
+            f"token=$$(buildkite-agent oidc request-token --audience {repo})",
+            f"echo $$token | docker login --password-stdin -u token {repo}",
+            f"docker push {repo}/{tag}",
         ],
     }
 

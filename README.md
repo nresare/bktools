@@ -35,7 +35,7 @@ uv run pytest
     repo = "https://github.com/example/manifests.git"
     ```
   - `output = "container"`: add a main-branch Docker publish step using
-    `docker buildx build` and `docker-image-push`.
+    `docker buildx build`, OIDC registry login, and `docker push`.
   - `variant = "rust-container"` is deprecated. Use `variant = "rust"` with
     `output = "container"` instead.
 - `bktools-image-version-hash`: hash a Docker build context and optionally emit a
