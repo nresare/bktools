@@ -21,6 +21,23 @@ from bktools.pipelinegen import (
 )
 
 
+def assert_docker_publish_step(
+    pipeline: str, *, depends_on: str, tag: str = "example-app:0.1.0-deadbeef"
+) -> None:
+    parsed = yaml.safe_load(pipeline)
+    step = parsed["steps"][1]
+
+    assert step["label"] == ":whale: build docker image"
+    assert step["depends_on"] == depends_on
+    assert step["agents"] == {"arch": "arm64"}
+    assert step["commands"] == [
+        f"docker buildx build -t repo.noa.re/{tag} .",
+        "token=$$(buildkite-agent oidc request-token --audience repo.noa.re)",
+        "echo $$token | docker login --password-stdin -u token repo.noa.re",
+        f"docker push repo.noa.re/{tag}",
+    ]
+
+
 def test_pipeline_yaml_without_publish_contains_test_step_only() -> None:
     pipeline = pipeline_yaml("example-app:0.1.0-deadbeef", variant="rust-container")
 
@@ -35,10 +52,7 @@ def test_pipeline_yaml_with_publish_adds_docker_push_step() -> None:
         should_publish=True,
     )
 
-    assert "depends_on: test" in pipeline
-    assert "command: docker buildx build -t example-app:0.1.0-deadbeef ." in pipeline
-    assert "image: example-app" in pipeline
-    assert "tag: 0.1.0-deadbeef" in pipeline
+    assert_docker_publish_step(pipeline, depends_on="test")
 
 
 def test_rust_pipeline_with_container_output_adds_docker_push_step() -> None:
@@ -49,10 +63,7 @@ def test_rust_pipeline_with_container_output_adds_docker_push_step() -> None:
         should_publish=True,
     )
 
-    assert "depends_on: test" in pipeline
-    assert "command: docker buildx build -t example-app:0.1.0-deadbeef ." in pipeline
-    assert "image: example-app" in pipeline
-    assert "tag: 0.1.0-deadbeef" in pipeline
+    assert_docker_publish_step(pipeline, depends_on="test")
 
 
 def test_uv_pipeline_yaml_without_publish_contains_test_and_build_step_only() -> None:
@@ -89,11 +100,7 @@ def test_uv_pipeline_with_container_output_uses_uv_steps_and_docker_publish() ->
     assert "uv run pytest" in pipeline
     assert "uv build --wheel" in pipeline
     assert "uv run ty check" in pipeline
-    assert "depends_on: test-and-build" in pipeline
-    assert "command: docker buildx build -t example-app:0.1.0-deadbeef ." in pipeline
-    assert "docker-image-push#v1.1.0" in pipeline
-    assert "image: example-app" in pipeline
-    assert "tag: 0.1.0-deadbeef" in pipeline
+    assert_docker_publish_step(pipeline, depends_on="test-and-build")
     assert "uv publish" not in pipeline
     assert "publish-to-packages" not in pipeline
 
@@ -294,7 +301,8 @@ def test_main_uses_uv_container_output_and_logs_docker_target(
     captured = capsys.readouterr()
     assert "uv run pytest" in captured.out
     assert (
-        "command: docker buildx build -t example-app:0.1.0-deadbeef ." in captured.out
+        "docker buildx build -t repo.noa.re/example-app:0.1.0-deadbeef ."
+        in captured.out
     )
     assert "building on main branch, uploading to example-app" in captured.err
 
