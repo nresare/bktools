@@ -40,7 +40,7 @@ local_scheme = "node-and-date"
 [[tool.uv.index]]
 name = "repo.noa.re"
 url = "https://repo.noa.re"
-publish-url = "https://repo.noa.re/legacy"
+publish-url = "https://repo.noa.re/"
 
 [tool.ruff]
 exclude = ["src/bktools/_version.py"]
