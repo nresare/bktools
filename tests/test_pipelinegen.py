@@ -31,10 +31,12 @@ def assert_docker_publish_step(
     assert step["depends_on"] == depends_on
     assert step["agents"] == {"arch": "arm64"}
     assert step["commands"] == [
-        f"docker buildx build -t repo.noa.re/{tag} .",
         "token=$$(buildkite-agent oidc request-token --audience repo.noa.re)",
         "echo $$token | docker login --password-stdin -u token repo.noa.re",
-        f"docker push repo.noa.re/{tag}",
+        (
+            "docker buildx build "
+            f"--output type=image,name=repo.noa.re/{tag},push=true,compression=zstd ."
+        ),
     ]
 
 
@@ -312,10 +314,13 @@ def test_main_uses_uv_container_output_and_logs_docker_target(
     main()
 
     captured = capsys.readouterr()
+    parsed = yaml.safe_load(captured.out)
+
     assert "uv run pytest" in captured.out
-    assert (
-        "docker buildx build -t repo.noa.re/example-app:0.1.0-deadbeef ."
-        in captured.out
+    assert parsed["steps"][1]["commands"][-1] == (
+        "docker buildx build "
+        "--output type=image,name=repo.noa.re/example-app:0.1.0-deadbeef,"
+        "push=true,compression=zstd ."
     )
     assert "building on main branch, uploading to example-app" in captured.err
 
