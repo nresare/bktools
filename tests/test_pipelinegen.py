@@ -22,7 +22,7 @@ from bktools.pipelinegen import (
 
 
 def assert_docker_publish_step(
-    pipeline: str, *, depends_on: str, tag: str = "example-app:0.1.0-deadbeef"
+    pipeline: str, *, depends_on: str, tag: str = "0.1.0-deadbeef"
 ) -> None:
     parsed = yaml.safe_load(pipeline)
     step = parsed["steps"][1]
@@ -34,8 +34,8 @@ def assert_docker_publish_step(
         "token=$$(buildkite-agent oidc request-token --audience repo.noa.re)",
         "echo $$token | docker login --password-stdin -u token repo.noa.re",
         (
-            "docker buildx build "
-            f"--output type=image,name=repo.noa.re/{tag},push=true,compression=zstd ."
+            "docker buildx build . "
+            f"--output type=image,name=repo.noa.re/example-app:{tag},push=true,compression=zstd"
         ),
     ]
 
@@ -47,7 +47,7 @@ def assert_fast_agent_step(pipeline: str, step_index: int = 0) -> None:
 
 
 def test_pipeline_yaml_without_publish_contains_test_step_only() -> None:
-    pipeline = pipeline_yaml("example-app:0.1.0-deadbeef", variant="rust-container")
+    pipeline = pipeline_yaml("0.1.0-deadbeef", variant="rust-container")
 
     assert "key: test" in pipeline
     assert "docker buildx build" not in pipeline
@@ -56,7 +56,8 @@ def test_pipeline_yaml_without_publish_contains_test_step_only() -> None:
 
 def test_pipeline_yaml_with_publish_adds_docker_push_step() -> None:
     pipeline = pipeline_yaml(
-        "example-app:0.1.0-deadbeef",
+        "0.1.0-deadbeef",
+        image_repo="repo.noa.re/example-app",
         variant="rust-container",
         should_publish=True,
     )
@@ -67,7 +68,8 @@ def test_pipeline_yaml_with_publish_adds_docker_push_step() -> None:
 
 def test_rust_pipeline_with_container_output_adds_docker_push_step() -> None:
     pipeline = pipeline_yaml(
-        "example-app:0.1.0-deadbeef",
+        "0.1.0-deadbeef",
+        image_repo="repo.noa.re/example-app",
         variant="rust",
         output="container",
         should_publish=True,
@@ -102,7 +104,8 @@ def test_uv_pipeline_yaml_with_publish_adds_publish_commands() -> None:
 
 def test_uv_pipeline_with_container_output_uses_uv_steps_and_docker_publish() -> None:
     pipeline = pipeline_yaml(
-        "example-app:0.1.0-deadbeef",
+        "0.1.0-deadbeef",
+        image_repo="repo.noa.re/example-app",
         variant="uv",
         output="container",
         should_publish=True,
@@ -121,9 +124,7 @@ def test_uv_pipeline_with_container_output_uses_uv_steps_and_docker_publish() ->
 def test_uv_pipeline_with_container_output_without_publish_has_no_publish_step() -> (
     None
 ):
-    pipeline = pipeline_yaml(
-        "example-app:0.1.0-deadbeef", variant="uv", output="container"
-    )
+    pipeline = pipeline_yaml("0.1.0-deadbeef", variant="uv", output="container")
 
     assert "uv run pytest" in pipeline
     assert "docker-image-push" not in pipeline
@@ -212,6 +213,49 @@ def test_read_config_loads_variant_and_output_from_config(tmp_path: Path) -> Non
     config_path.write_text('variant = "uv"\noutput = "container"\n')
 
     assert read_config(config_path) == PipelineConfig(variant="uv", output="container")
+
+
+def test_read_config_loads_relcoord_endpoint(tmp_path: Path) -> None:
+    config_path = tmp_path / "pipelinegen.toml"
+    config_path.write_text(
+        'variant = "uv"\n'
+        'output = "container"\n'
+        'relcoord-endpoint = "relcoord.example.com"\n'
+    )
+
+    assert read_config(config_path) == PipelineConfig(
+        variant="uv",
+        output="container",
+        relcoord_endpoint="relcoord.example.com",
+    )
+
+
+def test_pipeline_yaml_with_relcoord_endpoint_notifies_after_docker_publish() -> None:
+    pipeline = pipeline_yaml(
+        "0.1.0-deadbeef",
+        image_repo="repo.noa.re/example-app",
+        variant="uv",
+        output="container",
+        should_publish=True,
+        relcoord_endpoint="relcoord.example.com",
+    )
+    parsed = yaml.safe_load(pipeline)
+    step = parsed["steps"][1]
+
+    assert step["commands"][-2] == (
+        "docker buildx build . "
+        "--output type=image,name=repo.noa.re/example-app:0.1.0-deadbeef,"
+        "push=true,compression=zstd"
+    )
+    assert (
+        "      - docker buildx build .\n"
+        "        --output type=image,name=repo.noa.re/example-app:0.1.0-deadbeef,"
+        "push=true,compression=zstd" in pipeline
+    )
+    assert step["commands"][-1] == (
+        "notify-relcoord relcoord.example.com "
+        "--repo repo.noa.re/example-app --tag 0.1.0-deadbeef"
+    )
 
 
 def test_read_config_accepts_manifest_builder_repo(tmp_path: Path) -> None:
@@ -308,7 +352,11 @@ def test_main_uses_uv_container_output_and_logs_docker_target(
     monkeypatch.setenv("BUILDKITE_BRANCH", "main")
     monkeypatch.setattr(
         "bktools.pipelinegen.docker_image_tag",
-        lambda repo_root: "example-app:0.1.0-deadbeef",
+        lambda repo_root: "0.1.0-deadbeef",
+    )
+    monkeypatch.setattr(
+        "bktools.pipelinegen.package_name",
+        lambda repo_root: "example-app",
     )
 
     main()
@@ -318,9 +366,14 @@ def test_main_uses_uv_container_output_and_logs_docker_target(
 
     assert "uv run pytest" in captured.out
     assert parsed["steps"][1]["commands"][-1] == (
-        "docker buildx build "
+        "docker buildx build . "
         "--output type=image,name=repo.noa.re/example-app:0.1.0-deadbeef,"
-        "push=true,compression=zstd ."
+        "push=true,compression=zstd"
+    )
+    assert (
+        "      - docker buildx build .\n"
+        "        --output type=image,name=repo.noa.re/example-app:0.1.0-deadbeef,"
+        "push=true,compression=zstd" in captured.out
     )
     assert "building on main branch, uploading to example-app" in captured.err
 

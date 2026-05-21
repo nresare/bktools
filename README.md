@@ -37,8 +37,16 @@ uv run pytest
   - `output = "container"`: add a main-branch Docker publish step using
     OIDC registry login and `docker buildx build` with zstd-compressed image
     output.
+  - `relcoord-endpoint = "relcoord.example.com"`: after a container image is
+    built and pushed, call `notify-relcoord relcoord.example.com --repo ... --tag ...`.
   - `variant = "rust-container"` is deprecated. Use `variant = "rust"` with
     `output = "container"` instead.
 - `bktools-image-version-hash`: hash a Docker build context and optionally emit a
   Docker tag. The base version comes from `Cargo.toml` when present, otherwise
   from the nearest reachable `vX.Y.Z` git tag.
+- `notify-relcoord`: notify a relcoord endpoint about a published container
+  image. The tool takes the endpoint as a positional argument, requests a
+  Buildkite OIDC token for that audience, and posts the current
+  `BUILDKITE_COMMIT`, `BUILDKITE_REPO`, tag, OCI image repository such as
+  `repo.noa.re/idmouse`, and full image name such as
+  `repo.noa.re/idmouse:0.2.1-5257d218` to `/v1/change`.
