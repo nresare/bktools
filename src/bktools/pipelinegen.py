@@ -209,7 +209,7 @@ def docker_image_publish_step(
     ]
     if relcoord_endpoint is not None:
         commands.append(
-            "notify-relcoord "
+            "uv run notify-relcoord "
             f"{shlex.quote(relcoord_endpoint)} "
             f"--repo {shlex.quote(image_repo)} "
             f"--tag {shlex.quote(tag)}"

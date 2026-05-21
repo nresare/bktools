@@ -38,7 +38,8 @@ uv run pytest
     OIDC registry login and `docker buildx build` with zstd-compressed image
     output.
   - `relcoord-endpoint = "relcoord.example.com"`: after a container image is
-    built and pushed, call `notify-relcoord relcoord.example.com --repo ... --tag ...`.
+    built and pushed, call
+    `uv run notify-relcoord relcoord.example.com --repo ... --tag ...`.
   - `variant = "rust-container"` is deprecated. Use `variant = "rust"` with
     `output = "container"` instead.
 - `bktools-image-version-hash`: hash a Docker build context and optionally emit a
