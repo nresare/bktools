@@ -68,8 +68,8 @@ def test_docker_image_tag_uses_cargo_metadata_and_context_hash(tmp_path: Path) -
 
     tag = docker_image_tag(tmp_path)
 
-    assert tag.startswith("example-app:0.1.0-")
-    assert len(tag.removeprefix("example-app:0.1.0-")) == 8
+    assert tag.startswith("0.1.0-")
+    assert len(tag.removeprefix("0.1.0-")) == 8
 
 
 def test_docker_context_hash_ignores_dockerignore_file_contents(
@@ -119,8 +119,8 @@ def test_docker_image_tag_uses_nearest_version_tag_without_cargo(
 
     tag = docker_image_tag(tmp_path)
 
-    assert tag.startswith("havtorn:1.3.1-")
-    assert len(tag.removeprefix("havtorn:1.3.1-")) == 8
+    assert tag.startswith("1.3.1-")
+    assert len(tag.removeprefix("1.3.1-")) == 8
 
 
 def test_docker_image_tag_fails_descriptively_without_version_source(

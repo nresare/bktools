@@ -283,7 +283,7 @@ def docker_context_hash(repo_root: Path) -> str:
 
 
 def docker_image_tag(repo_root: Path) -> str:
-    return f"{package_name(repo_root)}:{base_version(repo_root)}-{docker_context_hash(repo_root)}"
+    return f"{base_version(repo_root)}-{docker_context_hash(repo_root)}"
 
 
 def main() -> int:
@@ -298,7 +298,7 @@ def main() -> int:
     parser.add_argument(
         "--tag",
         action="store_true",
-        help="Print a Docker tag in the form <package-name>:<base-version>-<hash>.",
+        help="Print a Docker tag in the form <base-version>-<hash>.",
     )
     parser.add_argument(
         "--repo-root",

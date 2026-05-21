@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -13,7 +14,7 @@ from typing import Any, cast
 
 import yaml
 
-from bktools.image_version_hash import docker_image_tag, git_toplevel
+from bktools.image_version_hash import docker_image_tag, git_toplevel, package_name
 
 PipelineVariant = str
 PipelineOutput = str | None
@@ -21,6 +22,7 @@ VALID_VARIANTS = ("rust", "uv", "manifest-builder", "rust-container")
 VALID_OUTPUTS = ("container",)
 PYTHON_PACKAGE_REGISTRY = "nresare/python"
 DEFAULT_AGENTS = {"speed": "fast"}
+CONTAINER_REGISTRY = "repo.noa.re"
 
 logger = logging.getLogger("pipelinegen")
 
@@ -48,6 +50,7 @@ class PipelineConfig:
     variant: PipelineVariant
     output: PipelineOutput = None
     manifest_builder: ManifestBuilderConfig | None = None
+    relcoord_endpoint: str | None = None
 
 
 def read_config(config_path: Path) -> PipelineConfig:
@@ -85,12 +88,18 @@ def read_config(config_path: Path) -> PipelineConfig:
             f"expected one of: {valid_outputs}"
         )
 
+    relcoord_endpoint = read_relcoord_endpoint(config, config_path)
+
     if variant == "rust-container":
         logger.warning(
             "pipelinegen config variant 'rust-container' is deprecated; "
             "use variant = 'rust' and output = 'container' instead"
         )
-        return PipelineConfig(variant="rust", output="container")
+        return PipelineConfig(
+            variant="rust",
+            output="container",
+            relcoord_endpoint=relcoord_endpoint,
+        )
 
     manifest_builder = None
     if variant == "manifest-builder":
@@ -100,6 +109,7 @@ def read_config(config_path: Path) -> PipelineConfig:
         variant=variant,
         output=output,
         manifest_builder=manifest_builder,
+        relcoord_endpoint=relcoord_endpoint,
     )
 
 
@@ -116,17 +126,40 @@ def read_manifest_builder_config(
     return ManifestBuilderConfig(repo=repo)
 
 
+def read_relcoord_endpoint(config: dict[str, object], config_path: Path) -> str | None:
+    endpoint = config.get("relcoord-endpoint")
+    if endpoint is None:
+        return None
+    if not isinstance(endpoint, str) or not endpoint:
+        raise SystemExit(
+            f"pipelinegen config {config_path} key 'relcoord-endpoint' "
+            "must be a non-empty string"
+        )
+    return endpoint
+
+
 def read_variant(config_path: Path) -> PipelineVariant:
     return read_config(config_path).variant
 
 
 def render_pipeline_yaml(pipeline: dict[str, object]) -> str:
     pipeline = apply_default_agents(pipeline)
-    return yaml.dump(
+    rendered = yaml.dump(
         pipeline,
         Dumper=PipelineYamlDumper,
         sort_keys=False,
         default_flow_style=False,
+    )
+    return wrap_docker_buildx_command(rendered)
+
+
+def wrap_docker_buildx_command(rendered: str) -> str:
+    return re.sub(
+        r"^(?P<indent>\s*)- (?P<command>docker buildx build(?: \.)?) "
+        r"--output (?P<output>.+)$",
+        r"\g<indent>- \g<command>\n\g<indent>  --output \g<output>",
+        rendered,
+        flags=re.MULTILINE,
     )
 
 
@@ -158,28 +191,54 @@ def apply_default_agents(pipeline: dict[str, object]) -> dict[str, object]:
     return {**pipeline, "steps": normalized_steps}
 
 
-def docker_image_publish_step(tag: str, depends_on: str) -> dict[str, object]:
-    repo = "repo.noa.re"
-    return {
+def docker_image_publish_step(
+    image_repo: str,
+    tag: str,
+    depends_on: str,
+    *,
+    relcoord_endpoint: str | None = None,
+) -> dict[str, object]:
+    image = container_image(image_repo, tag)
+    commands = [
+        f"token=$$(buildkite-agent oidc request-token --audience {CONTAINER_REGISTRY})",
+        f"echo $$token | docker login --password-stdin -u token {CONTAINER_REGISTRY}",
+        (
+            "docker buildx build . "
+            f"--output type=image,name={image},push=true,compression=zstd"
+        ),
+    ]
+    if relcoord_endpoint is not None:
+        commands.append(
+            "notify-relcoord "
+            f"{shlex.quote(relcoord_endpoint)} "
+            f"--repo {shlex.quote(image_repo)} "
+            f"--tag {shlex.quote(tag)}"
+        )
+
+    step: dict[str, object] = {
         "label": ":whale: build docker image",
         "depends_on": depends_on,
         "agents": {"arch": "arm64"},
-        "commands": [
-            f"token=$$(buildkite-agent oidc request-token --audience {repo})",
-            f"echo $$token | docker login --password-stdin -u token {repo}",
-            (
-                "docker buildx build "
-                f"--output type=image,name={repo}/{tag},push=true,compression=zstd ."
-            ),
-        ],
+        "commands": commands,
     }
+    return step
+
+
+def container_image(image_repo: str, tag: str) -> str:
+    return f"{image_repo}:{tag}"
+
+
+def container_image_repo(repo_suffix: str) -> str:
+    return f"{CONTAINER_REGISTRY}/{repo_suffix}"
 
 
 def rust_pipeline_yaml(
     tag: str | None = None,
     *,
+    image_repo: str | None = None,
     output: PipelineOutput = None,
     should_publish: bool = False,
+    relcoord_endpoint: str | None = None,
 ) -> str:
     steps: list[dict[str, object]] = [
         {
@@ -197,7 +256,13 @@ def rust_pipeline_yaml(
     if output == "container" and should_publish:
         if tag is None:
             raise ValueError("tag is required for container output")
-        steps.append(docker_image_publish_step(tag, "test"))
+        if image_repo is None:
+            raise ValueError("image_repo is required for container output")
+        steps.append(
+            docker_image_publish_step(
+                image_repo, tag, "test", relcoord_endpoint=relcoord_endpoint
+            )
+        )
 
     return render_pipeline_yaml({"steps": steps})
 
@@ -227,14 +292,22 @@ def uv_test_and_build_step(publish: bool = False) -> dict[str, object]:
 def uv_pipeline_yaml(
     tag: str | None = None,
     *,
+    image_repo: str | None = None,
     output: PipelineOutput = None,
     should_publish: bool = False,
+    relcoord_endpoint: str | None = None,
 ) -> str:
     steps = [uv_test_and_build_step(should_publish and output != "container")]
     if output == "container" and should_publish:
         if tag is None:
             raise ValueError("tag is required for container output")
-        steps.append(docker_image_publish_step(tag, "test-and-build"))
+        if image_repo is None:
+            raise ValueError("image_repo is required for container output")
+        steps.append(
+            docker_image_publish_step(
+                image_repo, tag, "test-and-build", relcoord_endpoint=relcoord_endpoint
+            )
+        )
     return render_pipeline_yaml({"steps": steps})
 
 
@@ -313,10 +386,12 @@ def manifest_builder_pipeline_yaml(
 def pipeline_yaml(
     tag: str | None = None,
     *,
+    image_repo: str | None = None,
     variant: PipelineVariant = "rust",
     output: PipelineOutput = None,
     should_publish: bool = False,
     manifest_builder: ManifestBuilderConfig | None = None,
+    relcoord_endpoint: str | None = None,
     is_pull_request: bool = False,
 ) -> str:
     if variant == "rust-container":
@@ -324,10 +399,22 @@ def pipeline_yaml(
         output = "container"
 
     if variant == "rust":
-        return rust_pipeline_yaml(tag, output=output, should_publish=should_publish)
+        return rust_pipeline_yaml(
+            tag,
+            image_repo=image_repo,
+            output=output,
+            should_publish=should_publish,
+            relcoord_endpoint=relcoord_endpoint,
+        )
 
     if variant == "uv":
-        return uv_pipeline_yaml(tag, output=output, should_publish=should_publish)
+        return uv_pipeline_yaml(
+            tag,
+            image_repo=image_repo,
+            output=output,
+            should_publish=should_publish,
+            relcoord_endpoint=relcoord_endpoint,
+        )
 
     if variant == "manifest-builder":
         if manifest_builder is None:
@@ -407,10 +494,13 @@ def main() -> None:
     config = read_config(repo_root / ".buildkite" / "pipelinegen.toml")
     should_publish = os.getenv("BUILDKITE_BRANCH") == "main"
     tag = None
+    image_repo = None
     upload_target = PYTHON_PACKAGE_REGISTRY
     if config.output == "container":
         tag = docker_image_tag(repo_root)
-        upload_target = tag.split(":", 1)[0]
+        repo_suffix = package_name(repo_root)
+        image_repo = container_image_repo(repo_suffix)
+        upload_target = repo_suffix
 
     branch = os.getenv("BUILDKITE_BRANCH", "")
     if config.variant != "manifest-builder":
@@ -423,10 +513,12 @@ def main() -> None:
 
     yaml = pipeline_yaml(
         tag,
+        image_repo=image_repo,
         variant=config.variant,
         output=config.output,
         should_publish=should_publish,
         manifest_builder=config.manifest_builder,
+        relcoord_endpoint=config.relcoord_endpoint,
         is_pull_request=is_pull_request_build(),
     )
     if args.dump:
