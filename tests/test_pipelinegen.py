@@ -242,7 +242,7 @@ def test_pipeline_yaml_with_relcoord_endpoint_notifies_after_docker_publish() ->
     parsed = yaml.safe_load(pipeline)
     step = parsed["steps"][1]
 
-    assert step["commands"][-2] == (
+    assert step["commands"][2] == (
         "docker buildx build . "
         "--output type=image,name=repo.noa.re/example-app:0.1.0-deadbeef,"
         "push=true,compression=zstd"
@@ -251,6 +251,10 @@ def test_pipeline_yaml_with_relcoord_endpoint_notifies_after_docker_publish() ->
         "      - docker buildx build .\n"
         "        --output type=image,name=repo.noa.re/example-app:0.1.0-deadbeef,"
         "push=true,compression=zstd" in pipeline
+    )
+    assert step["commands"][-3] == "uv venv"
+    assert step["commands"][-2] == (
+        'uv pip install bktools --pre --extra-index-url="https://repo.noa.re"'
     )
     assert step["commands"][-1] == (
         "uv run notify-relcoord relcoord.example.com "

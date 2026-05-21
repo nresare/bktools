@@ -208,11 +208,20 @@ def docker_image_publish_step(
         ),
     ]
     if relcoord_endpoint is not None:
-        commands.append(
-            "uv run notify-relcoord "
-            f"{shlex.quote(relcoord_endpoint)} "
-            f"--repo {shlex.quote(image_repo)} "
-            f"--tag {shlex.quote(tag)}"
+        commands.extend(
+            [
+                "uv venv",
+                (
+                    "uv pip install bktools --pre "
+                    '--extra-index-url="https://repo.noa.re"'
+                ),
+                (
+                    "uv run notify-relcoord "
+                    f"{shlex.quote(relcoord_endpoint)} "
+                    f"--repo {shlex.quote(image_repo)} "
+                    f"--tag {shlex.quote(tag)}"
+                ),
+            ]
         )
 
     step: dict[str, object] = {
