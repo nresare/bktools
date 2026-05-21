@@ -253,7 +253,7 @@ def test_pipeline_yaml_with_relcoord_endpoint_notifies_after_docker_publish() ->
         "push=true,compression=zstd" in pipeline
     )
     assert step["commands"][-1] == (
-        "notify-relcoord relcoord.example.com "
+        "uv run notify-relcoord relcoord.example.com "
         "--repo repo.noa.re/example-app --tag 0.1.0-deadbeef"
     )
 
