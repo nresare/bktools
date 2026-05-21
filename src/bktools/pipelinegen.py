@@ -165,10 +165,12 @@ def docker_image_publish_step(tag: str, depends_on: str) -> dict[str, object]:
         "depends_on": depends_on,
         "agents": {"arch": "arm64"},
         "commands": [
-            f"docker buildx build -t {repo}/{tag} .",
             f"token=$$(buildkite-agent oidc request-token --audience {repo})",
             f"echo $$token | docker login --password-stdin -u token {repo}",
-            f"docker push {repo}/{tag}",
+            (
+                "docker buildx build "
+                f"--output type=image,name={repo}/{tag},push=true,compression=zstd ."
+            ),
         ],
     }
 
