@@ -5,6 +5,7 @@ import logging
 import os
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
@@ -77,17 +78,17 @@ def build_change(tag: str, container_image_repo: str) -> RelcoordChange:
 
 
 def post_change(endpoint: str, token: str, change: RelcoordChange) -> None:
-    body = json.dumps(
-        {
-            "commit": change.commit,
-            "repo_url": change.repo_url,
-            "tag": change.tag,
-            "container_image_repo": change.container_image_repo,
-            "container_image": change.container_image,
-        }
-    ).encode()
+    url = f"https://{endpoint}/v1/change"
+    payload = {
+        "commit": change.commit,
+        "repo_url": change.repo_url,
+        "tag": change.tag,
+        "container_image_repo": change.container_image_repo,
+        "container_image": change.container_image,
+    }
+    body = json.dumps(payload).encode()
     request = urllib.request.Request(
-        f"https://{endpoint}/v1/change",
+        url,
         data=body,
         method="POST",
         headers={
@@ -95,8 +96,36 @@ def post_change(endpoint: str, token: str, change: RelcoordChange) -> None:
             "Content-Type": "application/json",
         },
     )
-    with urllib.request.urlopen(request) as response:
-        response.read()
+    try:
+        with urllib.request.urlopen(request) as response:
+            response.read()
+    except urllib.error.HTTPError as error:
+        response_body = error.read().decode("utf-8", errors="replace")
+        response_message = relcoord_error_message(response_body)
+        raise click.ClickException(
+            "\n".join(
+                [
+                    "relcoord request failed",
+                    f"URL: {url}",
+                    f"Sent: {json.dumps(payload, sort_keys=True)}",
+                    f"Returned: HTTP {error.code} {error.reason}",
+                    f"Message: {response_message}",
+                ]
+            )
+        ) from None
+
+
+def relcoord_error_message(response_body: str) -> str:
+    try:
+        response_json = json.loads(response_body)
+    except json.JSONDecodeError:
+        return response_body
+
+    if isinstance(response_json, dict) and isinstance(
+        response_json.get("message"), str
+    ):
+        return response_json["message"]
+    return response_body
 
 
 if __name__ == "__main__":
