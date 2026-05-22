@@ -102,17 +102,15 @@ def post_change(endpoint: str, token: str, change: RelcoordChange) -> None:
     except urllib.error.HTTPError as error:
         response_body = error.read().decode("utf-8", errors="replace")
         response_message = relcoord_error_message(response_body)
-        raise click.ClickException(
-            "\n".join(
-                [
-                    "relcoord request failed",
-                    f"URL: {url}",
-                    f"Sent: {json.dumps(payload, sort_keys=True)}",
-                    f"Returned: HTTP {error.code} {error.reason}",
-                    f"Message: {response_message}",
-                ]
-            )
-        ) from None
+        serialized_payload = json.dumps(payload, sort_keys=True)
+        logger.error(
+            "Failed to post to %s. The endpoint returned %s: %s",
+            url,
+            error.code,
+            response_message,
+        )
+        logger.error("The following data was sent: %s", serialized_payload)
+        raise click.ClickException("relcoord request failed") from None
 
 
 def relcoord_error_message(response_body: str) -> str:
