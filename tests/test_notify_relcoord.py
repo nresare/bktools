@@ -1,4 +1,5 @@
 import json
+import logging
 import urllib.error
 import urllib.request
 from email.message import Message
@@ -104,6 +105,7 @@ def test_post_change_posts_json_to_relcoord(
 
 
 def test_post_change_reports_relcoord_error_response(
+    caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("BUILDKITE_COMMIT", "deadbeef")
@@ -123,18 +125,27 @@ def test_post_change_reports_relcoord_error_response(
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    with pytest.raises(ClickException) as exc_info:
+    with caplog.at_level(logging.ERROR), pytest.raises(ClickException) as exc_info:
         post_change("relcoord.example.com", "token", change)
 
-    message = exc_info.value.message
-    assert "relcoord request failed" in message
-    assert "URL: https://relcoord.example.com/v1/change" in message
-    assert '"container_image": "repo.noa.re/example-app:0.1.0-deadbeef"' in message
-    assert "Returned: HTTP 500 Internal Server Error" in message
-    assert "Message: not a known repository" in message
+    assert exc_info.value.message == "relcoord request failed"
+    assert caplog.messages == [
+        (
+            "Failed to post to https://relcoord.example.com/v1/change. "
+            "The endpoint returned 500: not a known repository"
+        ),
+        (
+            'The following data was sent: {"commit": "deadbeef", '
+            '"container_image": "repo.noa.re/example-app:0.1.0-deadbeef", '
+            '"container_image_repo": "repo.noa.re/example-app", '
+            '"repo_url": "https://github.com/example/app.git", '
+            '"tag": "0.1.0-deadbeef"}'
+        ),
+    ]
 
 
 def test_post_change_reports_raw_relcoord_error_response_when_not_json(
+    caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("BUILDKITE_COMMIT", "deadbeef")
@@ -154,12 +165,55 @@ def test_post_change_reports_raw_relcoord_error_response_when_not_json(
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    with pytest.raises(ClickException) as exc_info:
+    with caplog.at_level(logging.ERROR), pytest.raises(ClickException) as exc_info:
         post_change("relcoord.example.com", "token", change)
 
-    message = exc_info.value.message
-    assert "Returned: HTTP 502 Bad Gateway" in message
-    assert "Message: upstream failed" in message
+    assert exc_info.value.message == "relcoord request failed"
+    assert (
+        "Failed to post to https://relcoord.example.com/v1/change. "
+        "The endpoint returned 502: upstream failed"
+    ) in caplog.messages
+
+
+def test_main_reports_relcoord_error_without_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BUILDKITE_COMMIT", "deadbeef")
+    monkeypatch.setenv("BUILDKITE_REPO", "https://github.com/example/app.git")
+    monkeypatch.setattr(
+        "bktools.notify_relcoord.request_relcoord_token", lambda endpoint: "token"
+    )
+
+    def fake_urlopen(request: urllib.request.Request) -> None:
+        raise urllib.error.HTTPError(
+            request.full_url,
+            400,
+            "Bad Request",
+            hdrs=Message(),
+            fp=BytesIO(b'{"message":"container image is invalid"}'),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "https://relcoord.example.com/",
+            "--tag",
+            "0.1.0-deadbeef",
+            "--repo",
+            "repo.noa.re/example-app",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    assert (
+        "ERROR Failed to post to https://relcoord.example.com/v1/change. "
+        "The endpoint returned 400: container image is invalid"
+    ) in result.output
+    assert "ERROR The following data was sent: " in result.output
+    assert "Error: relcoord request failed" in result.output
 
 
 def test_main_notifies_relcoord(monkeypatch: pytest.MonkeyPatch) -> None:
