@@ -97,10 +97,9 @@ def test_post_change_posts_json_to_relcoord(
     assert isinstance(request.data, bytes)
     assert json.loads(request.data) == {
         "commit": "deadbeef",
-        "repo_url": "https://github.com/example/app.git",
+        "repo": "https://github.com/example/app.git",
+        "image": "repo.noa.re/example-app:0.1.0-deadbeef",
         "tag": "0.1.0-deadbeef",
-        "container_image_repo": "repo.noa.re/example-app",
-        "container_image": "repo.noa.re/example-app:0.1.0-deadbeef",
     }
 
 
@@ -136,9 +135,8 @@ def test_post_change_reports_relcoord_error_response(
         ),
         (
             'The following data was sent: {"commit": "deadbeef", '
-            '"container_image": "repo.noa.re/example-app:0.1.0-deadbeef", '
-            '"container_image_repo": "repo.noa.re/example-app", '
-            '"repo_url": "https://github.com/example/app.git", '
+            '"image": "repo.noa.re/example-app:0.1.0-deadbeef", '
+            '"repo": "https://github.com/example/app.git", '
             '"tag": "0.1.0-deadbeef"}'
         ),
     ]

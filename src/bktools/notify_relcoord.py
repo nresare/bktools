@@ -81,10 +81,9 @@ def post_change(endpoint: str, token: str, change: RelcoordChange) -> None:
     url = f"https://{endpoint}/v1/change"
     payload = {
         "commit": change.commit,
-        "repo_url": change.repo_url,
+        "repo": change.repo_url,
+        "image": change.container_image,
         "tag": change.tag,
-        "container_image_repo": change.container_image_repo,
-        "container_image": change.container_image,
     }
     body = json.dumps(payload).encode()
     request = urllib.request.Request(
