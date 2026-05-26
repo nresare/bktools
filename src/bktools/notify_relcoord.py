@@ -67,7 +67,7 @@ def build_change(tag: str, container_image_repo: str) -> RelcoordChange:
     if not repo_url:
         raise click.ClickException("BUILDKITE_REPO is required")
 
-    image_repo = container_image_repo.rstrip("/")
+    image_repo = normalize_container_image_repo(container_image_repo)
     return RelcoordChange(
         commit=commit,
         repo_url=repo_url,
@@ -77,12 +77,21 @@ def build_change(tag: str, container_image_repo: str) -> RelcoordChange:
     )
 
 
+def normalize_container_image_repo(container_image_repo: str) -> str:
+    image_repo = container_image_repo.rstrip("/")
+    last_slash = image_repo.rfind("/")
+    last_colon = image_repo.rfind(":")
+    if last_colon > last_slash:
+        return image_repo[:last_colon]
+    return image_repo
+
+
 def post_change(endpoint: str, token: str, change: RelcoordChange) -> None:
     url = f"https://{endpoint}/v1/change"
     payload = {
         "commit": change.commit,
-        "repo": change.repo_url,
-        "image": change.container_image,
+        "config_repo": change.repo_url,
+        "image_repo": change.container_image_repo,
         "tag": change.tag,
     }
     body = json.dumps(payload).encode()
