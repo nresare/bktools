@@ -48,6 +48,6 @@ uv run pytest
 - `notify-relcoord`: notify a relcoord endpoint about a published container
   image. The tool takes the endpoint as a positional argument, requests a
   Buildkite OIDC token for that audience, and posts the current
-  `BUILDKITE_COMMIT`, `BUILDKITE_REPO`, tag, OCI image repository such as
-  `repo.noa.re/idmouse`, and full image name such as
-  `repo.noa.re/idmouse:0.2.1-5257d218` to `/v1/change`.
+  `BUILDKITE_COMMIT`, `BUILDKITE_REPO`, tag, and OCI image repository such as
+  `repo.noa.re/idmouse` to `/v1/change` as `commit`, `config_repo`, `tag`, and
+  `image_repo`.

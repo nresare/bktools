@@ -12,6 +12,7 @@ from click.testing import CliRunner
 from bktools.notify_relcoord import (
     build_change,
     main,
+    normalize_container_image_repo,
     normalize_endpoint,
     post_change,
     request_relcoord_token,
@@ -31,6 +32,28 @@ def test_build_change_uses_buildkite_metadata(monkeypatch: pytest.MonkeyPatch) -
     assert change.tag == "0.1.0-deadbeef"
     assert change.container_image_repo == "repo.noa.re/example-app"
     assert change.container_image == "repo.noa.re/example-app:0.1.0-deadbeef"
+
+
+def test_build_change_removes_tag_from_container_image_repo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BUILDKITE_COMMIT", "deadbeef")
+    monkeypatch.setenv("BUILDKITE_REPO", "https://github.com/example/app.git")
+
+    change = build_change(
+        tag="0.1.0-deadbeef",
+        container_image_repo="repo.noa.re/example-app:0.1.0-deadbeef",
+    )
+
+    assert change.container_image_repo == "repo.noa.re/example-app"
+    assert change.container_image == "repo.noa.re/example-app:0.1.0-deadbeef"
+
+
+def test_normalize_container_image_repo_keeps_registry_port() -> None:
+    assert (
+        normalize_container_image_repo("localhost:5000/example-app:0.1.0")
+        == "localhost:5000/example-app"
+    )
 
 
 def test_request_relcoord_token_uses_endpoint_as_audience(
@@ -97,8 +120,8 @@ def test_post_change_posts_json_to_relcoord(
     assert isinstance(request.data, bytes)
     assert json.loads(request.data) == {
         "commit": "deadbeef",
-        "repo": "https://github.com/example/app.git",
-        "image": "repo.noa.re/example-app:0.1.0-deadbeef",
+        "config_repo": "https://github.com/example/app.git",
+        "image_repo": "repo.noa.re/example-app",
         "tag": "0.1.0-deadbeef",
     }
 
@@ -135,8 +158,8 @@ def test_post_change_reports_relcoord_error_response(
         ),
         (
             'The following data was sent: {"commit": "deadbeef", '
-            '"image": "repo.noa.re/example-app:0.1.0-deadbeef", '
-            '"repo": "https://github.com/example/app.git", '
+            '"config_repo": "https://github.com/example/app.git", '
+            '"image_repo": "repo.noa.re/example-app", '
             '"tag": "0.1.0-deadbeef"}'
         ),
     ]

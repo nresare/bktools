@@ -266,7 +266,11 @@ def test_run_manifest_builder_diff_includes_added_file_after_move(
     )
     (input_dir / "old.yaml").write_text("name: original\n")
     subprocess.run(["git", "add", "."], cwd=input_dir, check=True)
-    subprocess.run(["git", "commit", "-m", "Initial"], cwd=input_dir, check=True)
+    subprocess.run(
+        ["git", "commit", "--no-gpg-sign", "-m", "Initial"],
+        cwd=input_dir,
+        check=True,
+    )
 
     (input_dir / "old.yaml").unlink()
     (input_dir / "new.yaml").write_text("name: original\n")
