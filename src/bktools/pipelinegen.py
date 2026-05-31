@@ -203,7 +203,7 @@ def docker_image_publish_step(
         f"token=$$(buildkite-agent oidc request-token --audience {CONTAINER_REGISTRY})",
         f"echo $$token | docker login --password-stdin -u token {CONTAINER_REGISTRY}",
         (
-            "docker buildx build . "
+            "docker buildx build --progress=plain . "
             f"--output type=image,name={image},push=true,compression=zstd"
         ),
     ]
