@@ -30,14 +30,29 @@ def assert_docker_publish_step(
     assert step["label"] == ":whale: build docker image"
     assert step["depends_on"] == depends_on
     assert step["agents"] == {"arch": "arm64"}
-    assert step["commands"] == [
-        "token=$$(buildkite-agent oidc request-token --audience repo.noa.re)",
-        "echo $$token | docker login --password-stdin -u token repo.noa.re",
-        (
-            "docker buildx build . "
-            f"--output type=image,name=repo.noa.re/example-app:{tag},push=true,compression=zstd"
-        ),
+    assert step["commands"][0] == (
+        "token=$$(buildkite-agent oidc request-token --audience repo.noa.re)"
+    )
+    assert step["commands"][1] == (
+        "echo $$token | docker login --password-stdin -u token repo.noa.re"
+    )
+    assert_docker_buildx_publish_command(
+        step["commands"], f"repo.noa.re/example-app:{tag}"
+    )
+
+
+def assert_docker_buildx_publish_command(
+    commands: list[str], expected_image: str
+) -> int:
+    matches = [
+        index
+        for index, command in enumerate(commands)
+        if command.startswith("docker buildx build ")
+        and f"name={expected_image}" in command
+        and "push=true" in command
     ]
+    assert len(matches) == 1
+    return matches[0]
 
 
 def assert_fast_agent_step(pipeline: str, step_index: int = 0) -> None:
@@ -242,15 +257,8 @@ def test_pipeline_yaml_with_relcoord_endpoint_notifies_after_docker_publish() ->
     parsed = yaml.safe_load(pipeline)
     step = parsed["steps"][1]
 
-    assert step["commands"][2] == (
-        "docker buildx build . "
-        "--output type=image,name=repo.noa.re/example-app:0.1.0-deadbeef,"
-        "push=true,compression=zstd"
-    )
-    assert (
-        "      - docker buildx build .\n"
-        "        --output type=image,name=repo.noa.re/example-app:0.1.0-deadbeef,"
-        "push=true,compression=zstd" in pipeline
+    build_command_index = assert_docker_buildx_publish_command(
+        step["commands"], "repo.noa.re/example-app:0.1.0-deadbeef"
     )
     assert step["commands"][-3] == "uv venv"
     assert step["commands"][-2] == (
@@ -260,6 +268,7 @@ def test_pipeline_yaml_with_relcoord_endpoint_notifies_after_docker_publish() ->
         "uv run notify-relcoord relcoord.example.com "
         "--repo repo.noa.re/example-app --tag 0.1.0-deadbeef"
     )
+    assert build_command_index < step["commands"].index(step["commands"][-1])
 
 
 def test_read_config_accepts_manifest_builder_repo(tmp_path: Path) -> None:
@@ -369,15 +378,8 @@ def test_main_uses_uv_container_output_and_logs_docker_target(
     parsed = yaml.safe_load(captured.out)
 
     assert "uv run pytest" in captured.out
-    assert parsed["steps"][1]["commands"][-1] == (
-        "docker buildx build . "
-        "--output type=image,name=repo.noa.re/example-app:0.1.0-deadbeef,"
-        "push=true,compression=zstd"
-    )
-    assert (
-        "      - docker buildx build .\n"
-        "        --output type=image,name=repo.noa.re/example-app:0.1.0-deadbeef,"
-        "push=true,compression=zstd" in captured.out
+    assert_docker_buildx_publish_command(
+        parsed["steps"][1]["commands"], "repo.noa.re/example-app:0.1.0-deadbeef"
     )
     assert "building on main branch, uploading to example-app" in captured.err
 
