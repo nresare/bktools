@@ -282,6 +282,121 @@ def test_run_manifest_builder_diff_includes_added_file_after_move(
     assert "rename to new.yaml" in manifest_diff.diff
 
 
+def test_run_manifest_builder_diff_summarizes_repeated_metadata_and_filters_noise(
+    tmp_path: Path,
+) -> None:
+    input_dir = tmp_path / "output"
+    input_dir.mkdir()
+
+    subprocess.run(["git", "init"], cwd=input_dir, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"], cwd=input_dir, check=True
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test User"], cwd=input_dir, check=True
+    )
+    (input_dir / "deployment.yaml").write_text(
+        "apiVersion: apps/v1\n"
+        "kind: Deployment\n"
+        "metadata:\n"
+        "  name: app\n"
+        "  labels:\n"
+        "    app.kubernetes.io/version: v1.8.0\n"
+        "  annotations:\n"
+        "    noa.re/deploy-id: old-deploy\n"
+        "spec:\n"
+        "  template:\n"
+        "    spec:\n"
+        "      containers:\n"
+        "      - name: app\n"
+        "        image: example/app:v1.8.0\n"
+    )
+    (input_dir / "service.yaml").write_text(
+        "apiVersion: v1\n"
+        "kind: Service\n"
+        "metadata:\n"
+        "  name: app\n"
+        "  labels:\n"
+        "    app.kubernetes.io/version: v1.8.0\n"
+        "  annotations:\n"
+        "    noa.re/deploy-id: old-deploy\n"
+        "spec:\n"
+        "  ports:\n"
+        "  - port: 80\n"
+    )
+    subprocess.run(["git", "add", "."], cwd=input_dir, check=True)
+    subprocess.run(
+        ["git", "commit", "--no-gpg-sign", "-m", "Initial"],
+        cwd=input_dir,
+        check=True,
+    )
+
+    (input_dir / "deployment.yaml").write_text(
+        "apiVersion: apps/v1\n"
+        "kind: Deployment\n"
+        "metadata:\n"
+        "  name: app\n"
+        "  labels:\n"
+        "    app.kubernetes.io/version: v1.8.1\n"
+        "  annotations:\n"
+        "    noa.re/deploy-id: new-deploy\n"
+        "spec:\n"
+        "  template:\n"
+        "    spec:\n"
+        "      containers:\n"
+        "      - name: app\n"
+        "        image: example/app:v1.8.1\n"
+    )
+    (input_dir / "service.yaml").write_text(
+        "apiVersion: v1\n"
+        "kind: Service\n"
+        "metadata:\n"
+        "  name: app\n"
+        "  labels:\n"
+        "    app.kubernetes.io/version: v1.8.1\n"
+        "  annotations:\n"
+        "    noa.re/deploy-id: new-deploy\n"
+        "spec:\n"
+        "  ports:\n"
+        "  - port: 80\n"
+    )
+
+    _, manifest_diff = diffcomment.run_manifest_builder_diff(input_dir)
+
+    assert (
+        "- Label `app.kubernetes.io/version` changed from `v1.8.0` to `v1.8.1` "
+        "on 2 manifests."
+    ) in manifest_diff.summary
+    assert "noa.re/deploy-id" in manifest_diff.diff
+    assert "noa.re/deploy-id" not in manifest_diff.summary
+    assert manifest_diff.filtered_diff is not None
+    assert "noa.re/deploy-id" not in manifest_diff.filtered_diff
+    assert "app.kubernetes.io/version" not in manifest_diff.filtered_diff
+    assert "image: example/app:v1.8.1" in manifest_diff.filtered_diff
+
+
+def test_build_comment_body_includes_metadata_summary_and_filtered_diff() -> None:
+    comment = diffcomment.build_comment_body(
+        "12",
+        0,
+        diffcomment.ManifestDiff(
+            stat="deployment.yaml | 4 ++--\n",
+            diff="diff --git a/deployment.yaml b/deployment.yaml\n-noise\n+noise",
+            summary="- Label `app.kubernetes.io/version` changed from `v1` to `v2` on 2 manifests.",
+            filtered_diff="diff --git a/deployment.yaml b/deployment.yaml\n-old\n+new",
+        ),
+    )
+
+    assert "Metadata changes:" in comment.body
+    assert "changed from `v1` to `v2` on 2 manifests" in comment.body
+    assert (
+        "Repeated metadata-only changes have been summarized or omitted" in comment.body
+    )
+    assert "-noise" not in comment.body
+    assert "+new" in comment.body
+    assert comment.omitted_context_diff
+
+
 def test_github_repo_parses_buildkite_repo(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("BUILDKITE_PULL_REQUEST_REPO", raising=False)
     monkeypatch.setenv(

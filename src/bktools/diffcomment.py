@@ -8,10 +8,14 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import click
+import yaml
 from manifest_builder import __version__ as MANIFEST_BUILDER_VERSION
 
 
@@ -20,6 +24,8 @@ GITHUB_PROXY_BASE_URL = "https://idcat.noa.re/proxy"
 GITHUB_API_VERSION = "2026-03-10"
 MAX_COMMENT_CHARS = 65_536
 FULL_DIFF_ARTIFACT = "manifest-builder.diff"
+DEPLOY_ID_METADATA_PATH = ("metadata", "annotations", "noa.re/deploy-id")
+METADATA_SUMMARY_THRESHOLD = 2
 
 logger = logging.getLogger("diffcomment")
 
@@ -28,6 +34,8 @@ logger = logging.getLogger("diffcomment")
 class ManifestDiff:
     stat: str
     diff: str
+    summary: str = ""
+    filtered_diff: str | None = None
 
 
 @dataclass(frozen=True)
@@ -108,8 +116,14 @@ def run_manifest_builder_diff(
     git_add_all(input_dir)
     diff_stat = git_diff_stat(input_dir)
     diff_output = git_diff(input_dir)
+    summary, filtered_diff = smart_manifest_diff(input_dir, diff_output)
 
-    return 0, ManifestDiff(stat=diff_stat, diff=diff_output)
+    return 0, ManifestDiff(
+        stat=diff_stat,
+        diff=diff_output,
+        summary=summary,
+        filtered_diff=filtered_diff,
+    )
 
 
 def git_add_all(output_dir: Path) -> None:
@@ -140,6 +154,277 @@ def git_diff(output_dir: Path) -> str:
         check=True,
     )
     return result.stdout
+
+
+def git_diff_name_only(output_dir: Path) -> list[str]:
+    result = subprocess.run(
+        ["git", "diff", "--cached", "--name-only"],
+        cwd=output_dir,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return [line for line in result.stdout.splitlines() if line]
+
+
+def git_show(output_dir: Path, revision_path: str) -> str | None:
+    result = subprocess.run(
+        ["git", "show", revision_path],
+        cwd=output_dir,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode:
+        return None
+    return result.stdout
+
+
+def smart_manifest_diff(output_dir: Path, raw_diff: str) -> tuple[str, str | None]:
+    try:
+        metadata_changes = summarize_metadata_changes(output_dir)
+    except (subprocess.SubprocessError, yaml.YAMLError, OSError):
+        logger.exception("failed to summarize manifest metadata changes")
+        return "", None
+
+    summary_paths = {
+        change.path
+        for change, count in metadata_changes.items()
+        if count >= METADATA_SUMMARY_THRESHOLD
+    }
+    suppress_paths = {DEPLOY_ID_METADATA_PATH, *summary_paths}
+    if not suppress_paths:
+        return "", None
+
+    filtered_diff = filter_metadata_hunks(raw_diff, suppress_paths)
+    summary = render_metadata_summary(metadata_changes)
+    if filtered_diff == raw_diff and not summary:
+        return "", None
+    return summary, filtered_diff
+
+
+@dataclass(frozen=True)
+class MetadataChange:
+    section: str
+    key: str
+    old: str | None
+    new: str | None
+
+    @property
+    def path(self) -> tuple[str, str, str]:
+        return ("metadata", self.section, self.key)
+
+
+def summarize_metadata_changes(output_dir: Path) -> Counter[MetadataChange]:
+    changes: Counter[MetadataChange] = Counter()
+    for path in git_diff_name_only(output_dir):
+        if not path.endswith((".yaml", ".yml")):
+            continue
+        old_content = git_show(output_dir, f"HEAD:{path}")
+        new_content = git_show(output_dir, f":{path}")
+        if new_content is None:
+            continue
+        changes.update(compare_manifest_metadata(old_content or "", new_content))
+    return changes
+
+
+def compare_manifest_metadata(
+    old_content: str, new_content: str
+) -> Counter[MetadataChange]:
+    old_docs = parse_yaml_documents(old_content)
+    new_docs = parse_yaml_documents(new_content)
+    changes: Counter[MetadataChange] = Counter()
+    for index, new_doc in enumerate(new_docs):
+        old_doc = old_docs[index] if index < len(old_docs) else {}
+        changes.update(compare_document_metadata(old_doc, new_doc))
+    return changes
+
+
+def parse_yaml_documents(content: str) -> list[object]:
+    if not content.strip():
+        return []
+    return list(yaml.safe_load_all(content))
+
+
+def compare_document_metadata(
+    old_doc: object, new_doc: object
+) -> Counter[MetadataChange]:
+    changes: Counter[MetadataChange] = Counter()
+    old_metadata = mapping_value(old_doc, "metadata")
+    new_metadata = mapping_value(new_doc, "metadata")
+    for section in ("labels", "annotations"):
+        old_values = string_mapping_value(old_metadata, section)
+        new_values = string_mapping_value(new_metadata, section)
+        for key in old_values.keys() | new_values.keys():
+            path = ("metadata", section, key)
+            if path == DEPLOY_ID_METADATA_PATH:
+                continue
+            old = old_values.get(key)
+            new = new_values.get(key)
+            if old != new:
+                changes[MetadataChange(section, key, old, new)] += 1
+    return changes
+
+
+def mapping_value(value: object, key: str) -> dict[object, object]:
+    if not isinstance(value, Mapping):
+        return {}
+    mapping = cast(Mapping[object, object], value)
+    child = mapping.get(key)
+    if not isinstance(child, Mapping):
+        return {}
+    child_mapping = cast(Mapping[object, object], child)
+    return {child_key: child_value for child_key, child_value in child_mapping.items()}
+
+
+def string_mapping_value(value: object, key: str) -> dict[str, str]:
+    mapping = mapping_value(value, key)
+    return {
+        str(child_key): str(child_value) for child_key, child_value in mapping.items()
+    }
+
+
+def render_metadata_summary(metadata_changes: Counter[MetadataChange]) -> str:
+    lines = []
+    for change, count in sorted(
+        metadata_changes.items(),
+        key=lambda item: (
+            item[0].section,
+            item[0].key,
+            item[0].old or "",
+            item[0].new or "",
+        ),
+    ):
+        if count < METADATA_SUMMARY_THRESHOLD:
+            continue
+        name = "Label" if change.section == "labels" else "Annotation"
+        if change.old is None:
+            description = f"{name} `{change.key}` was added with `{change.new}`"
+        elif change.new is None:
+            description = f"{name} `{change.key}` was removed"
+        else:
+            description = (
+                f"{name} `{change.key}` changed from `{change.old}` to `{change.new}`"
+            )
+        lines.append(f"- {description} on {count} manifests.")
+    return "\n".join(lines)
+
+
+def filter_metadata_hunks(
+    raw_diff: str, suppress_paths: set[tuple[str, str, str]]
+) -> str:
+    files = split_diff_files(raw_diff)
+    filtered_files = []
+    for file_lines in files:
+        filtered = filter_file_hunks(file_lines, suppress_paths)
+        if filtered:
+            filtered_files.extend(filtered)
+    return "\n".join(filtered_files).rstrip("\n")
+
+
+def split_diff_files(raw_diff: str) -> list[list[str]]:
+    files: list[list[str]] = []
+    current: list[str] = []
+    for line in raw_diff.splitlines():
+        if line.startswith("diff --git ") and current:
+            files.append(current)
+            current = []
+        current.append(line)
+    if current:
+        files.append(current)
+    return files
+
+
+def filter_file_hunks(
+    file_lines: list[str], suppress_paths: set[tuple[str, str, str]]
+) -> list[str]:
+    header: list[str] = []
+    hunks: list[list[str]] = []
+    current_hunk: list[str] | None = None
+    for line in file_lines:
+        if line.startswith("@@ "):
+            if current_hunk is not None:
+                hunks.append(current_hunk)
+            current_hunk = [line]
+        elif current_hunk is None:
+            header.append(line)
+        else:
+            current_hunk.append(line)
+    if current_hunk is not None:
+        hunks.append(current_hunk)
+
+    kept_hunks = [
+        hunk for hunk in hunks if not hunk_is_suppressed_metadata(hunk, suppress_paths)
+    ]
+    if not kept_hunks:
+        return []
+    return [
+        *header,
+        *[
+            line
+            for hunk in kept_hunks
+            for line in filter_suppressed_metadata_lines(hunk, suppress_paths)
+        ],
+    ]
+
+
+def hunk_is_suppressed_metadata(
+    hunk: list[str], suppress_paths: set[tuple[str, str, str]]
+) -> bool:
+    changed_paths = changed_yaml_paths(hunk)
+    if not changed_paths:
+        return False
+    return all(path in suppress_paths for path in changed_paths)
+
+
+def changed_yaml_paths(hunk: list[str]) -> set[tuple[str, ...]]:
+    stack: list[tuple[int, str]] = []
+    changed_paths: set[tuple[str, ...]] = set()
+    for line in hunk[1:]:
+        if not line:
+            continue
+        marker = line[0]
+        if marker not in " +-":
+            continue
+        content = line[1:]
+        path = yaml_mapping_path(content, stack)
+        if marker in "+-" and path:
+            changed_paths.add(path)
+    return changed_paths
+
+
+def filter_suppressed_metadata_lines(
+    hunk: list[str], suppress_paths: set[tuple[str, str, str]]
+) -> list[str]:
+    stack: list[tuple[int, str]] = []
+    filtered = [hunk[0]]
+    for line in hunk[1:]:
+        if not line:
+            filtered.append(line)
+            continue
+        marker = line[0]
+        if marker not in " +-":
+            filtered.append(line)
+            continue
+        content = line[1:]
+        path = yaml_mapping_path(content, stack)
+        if marker in "+-" and path in suppress_paths:
+            continue
+        filtered.append(line)
+    return filtered
+
+
+def yaml_mapping_path(line: str, stack: list[tuple[int, str]]) -> tuple[str, ...]:
+    match = re.match(r"^(\s*)([^:#][^:]*):(?:\s.*)?$", line)
+    if not match:
+        return tuple(key for _, key in stack)
+
+    indent = len(match.group(1))
+    key = match.group(2).strip().strip("\"'")
+    while stack and stack[-1][0] >= indent:
+        stack.pop()
+    path = tuple([key for _, key in stack] + [key])
+    stack.append((indent, key))
+    return path
 
 
 def write_full_diff_artifact(repo_root: Path, diff: ManifestDiff) -> Path:
@@ -201,8 +486,11 @@ def build_comment_body(
         metadata.append(f"Exit code: `{returncode}`")
 
     stat = diff.stat.rstrip()
-    context_diff = diff.diff.strip()
-    if not stat and not context_diff:
+    context_diff = (
+        diff.filtered_diff if diff.filtered_diff is not None else diff.diff
+    ).strip()
+    summary = diff.summary.strip()
+    if not stat and not context_diff and not summary:
         lines = ["The generated output is the same before and after this change"]
         if metadata:
             lines.extend(["", *metadata])
@@ -213,19 +501,37 @@ def build_comment_body(
         stat_fence = markdown_fence(stat)
         lines.extend([stat_fence, stat, stat_fence])
 
-    body_with_context = "\n".join(
-        [
-            *lines,
+    if summary:
+        lines.extend(["", "Metadata changes:", "", summary])
+
+    diff_was_filtered = (
+        diff.filtered_diff is not None and diff.filtered_diff != diff.diff
+    )
+    if diff_was_filtered:
+        lines.extend(
+            [
+                "",
+                (
+                    "_Repeated metadata-only changes have been summarized or omitted. "
+                    f"The full diff has been uploaded as Buildkite artifact `{FULL_DIFF_ARTIFACT}`._"
+                ),
+            ]
+        )
+
+    context_lines = []
+    if context_diff:
+        context_lines = [
             "",
             f"{markdown_fence(context_diff)}diff",
             context_diff,
             markdown_fence(context_diff),
-            "",
-            *metadata,
         ]
-    )
+
+    body_with_context = "\n".join([*lines, *context_lines, "", *metadata])
     if len(body_with_context) <= MAX_COMMENT_CHARS:
-        return CommentBody(body=body_with_context, omitted_context_diff=False)
+        return CommentBody(
+            body=body_with_context, omitted_context_diff=diff_was_filtered
+        )
 
     body_without_context = "\n".join(
         [
