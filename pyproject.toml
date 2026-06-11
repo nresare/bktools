@@ -30,13 +30,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.version]
 source = "vcs"
+raw-options = { version_scheme = "post-release" }
 
 [tool.hatch.build.hooks.vcs]
 version-file = "src/bktools/_version.py"
-
-[tool.setuptools_scm]
-version_scheme = "guess-next-semver"
-local_scheme = "node-and-date"
 
 [[tool.uv.index]]
 name = "repo.noa.re"
