@@ -23,6 +23,9 @@ VALID_OUTPUTS = ("container",)
 PYTHON_PACKAGE_REGISTRY = "nresare/python"
 DEFAULT_AGENTS = {"speed": "fast"}
 CONTAINER_REGISTRY = "repo.noa.re"
+BKTOOLS_INSTALL_COMMAND = (
+    'uv pip install bktools --extra-index-url="https://repo.noa.re"'
+)
 
 logger = logging.getLogger("pipelinegen")
 
@@ -211,10 +214,7 @@ def docker_image_publish_step(
         commands.extend(
             [
                 "uv venv",
-                (
-                    "uv pip install bktools --pre "
-                    '--extra-index-url="https://repo.noa.re"'
-                ),
+                BKTOOLS_INSTALL_COMMAND,
                 (
                     "uv run notify-relcoord "
                     f"{shlex.quote(relcoord_endpoint)} "
@@ -336,7 +336,7 @@ def diffcomment_pipeline_yaml(
                     "command": "\n".join(
                         [
                             "uv venv",
-                            "uv pip install --pre --upgrade bktools \\",
+                            "uv pip install --upgrade bktools \\",
                             '  --extra-index-url="https://repo.noa.re"',
                             (
                                 "checkout=$$(uv run manifest-builder-on-checkout --repo "
@@ -378,7 +378,7 @@ def manifest_builder_pipeline_yaml(
                     "command": "\n".join(
                         [
                             "uv venv",
-                            "uv pip install --pre --upgrade bktools \\",
+                            "uv pip install --upgrade bktools \\",
                             '  --extra-index-url="https://repo.noa.re"',
                             (
                                 "uv run manifest-builder-on-checkout --repo "
