@@ -156,8 +156,9 @@ def test_diffcomment_pipeline_yaml_posts_manifest_diff_comment() -> None:
     pipeline = diffcomment_pipeline_yaml("https://github.com/nresare/manifests.git")
     assert_fast_agent_step(pipeline)
     assert "uv venv" in pipeline
-    assert "uv pip install --pre --upgrade bktools \\" in pipeline
+    assert "uv pip install --upgrade bktools \\" in pipeline
     assert '--extra-index-url="https://repo.noa.re"' in pipeline
+    assert "--pre" not in pipeline
     assert (
         "checkout=$$(uv run manifest-builder-on-checkout --repo "
         "https://github.com/nresare/manifests.git --no-commit)"
@@ -174,8 +175,9 @@ def test_manifest_builder_pipeline_yaml_runs_on_checkout_script() -> None:
 
     assert_fast_agent_step(pipeline)
     assert "uv venv" in pipeline
-    assert "uv pip install --pre --upgrade bktools \\" in pipeline
+    assert "uv pip install --upgrade bktools \\" in pipeline
     assert '--extra-index-url="https://repo.noa.re"' in pipeline
+    assert "--pre" not in pipeline
     assert (
         "uv run manifest-builder-on-checkout --repo "
         "https://github.com/nresare/manifests.git"
@@ -262,8 +264,9 @@ def test_pipeline_yaml_with_relcoord_endpoint_notifies_after_docker_publish() ->
     )
     assert step["commands"][-3] == "uv venv"
     assert step["commands"][-2] == (
-        'uv pip install bktools --pre --extra-index-url="https://repo.noa.re"'
+        'uv pip install bktools --extra-index-url="https://repo.noa.re"'
     )
+    assert "--pre" not in step["commands"][-2]
     assert step["commands"][-1] == (
         "uv run notify-relcoord relcoord.example.com "
         "--repo repo.noa.re/example-app --tag 0.1.0-deadbeef"
