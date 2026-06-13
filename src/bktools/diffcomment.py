@@ -375,7 +375,8 @@ def hunk_is_suppressed_metadata(
 
 
 def changed_yaml_paths(hunk: list[str]) -> set[tuple[str, ...]]:
-    stack = hunk_header_yaml_stack(hunk[0])
+    old_stack = hunk_header_yaml_stack(hunk[0])
+    new_stack = hunk_header_yaml_stack(hunk[0])
     changed_paths: set[tuple[str, ...]] = set()
     for line in hunk[1:]:
         if not line:
@@ -384,8 +385,13 @@ def changed_yaml_paths(hunk: list[str]) -> set[tuple[str, ...]]:
         if marker not in " +-":
             continue
         content = line[1:]
+        if marker == " ":
+            yaml_mapping_path(content, old_stack)
+            yaml_mapping_path(content, new_stack)
+            continue
+        stack = old_stack if marker == "-" else new_stack
         path = yaml_mapping_path(content, stack)
-        if marker in "+-" and path:
+        if path:
             changed_paths.add(path)
     return changed_paths
 
@@ -405,7 +411,8 @@ def filter_suppressed_metadata_lines(
             for changed_path in changed_paths
         )
     }
-    stack = hunk_header_yaml_stack(hunk[0])
+    old_stack = hunk_header_yaml_stack(hunk[0])
+    new_stack = hunk_header_yaml_stack(hunk[0])
     filtered = [hunk[0]]
     for line in hunk[1:]:
         if not line:
@@ -416,6 +423,12 @@ def filter_suppressed_metadata_lines(
             filtered.append(line)
             continue
         content = line[1:]
+        if marker == " ":
+            yaml_mapping_path(content, old_stack)
+            yaml_mapping_path(content, new_stack)
+            filtered.append(line)
+            continue
+        stack = old_stack if marker == "-" else new_stack
         path = yaml_mapping_path(content, stack)
         if marker in "+-" and (
             path in suppress_paths

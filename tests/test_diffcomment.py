@@ -404,6 +404,36 @@ def test_filter_metadata_hunks_handles_metadata_context_headers() -> None:
     assert filtered_diff == ""
 
 
+def test_filter_metadata_hunks_treats_null_annotations_as_absent() -> None:
+    raw_diff = (
+        "diff --git a/apiservice.yaml b/apiservice.yaml\n"
+        "index 1234567..89abcde 100644\n"
+        "--- a/apiservice.yaml\n"
+        "+++ b/apiservice.yaml\n"
+        "@@ -6,8 +6,9 @@ metadata:\n"
+        "   labels:\n"
+        "     app.kubernetes.io/name: metrics-server\n"
+        "     app.kubernetes.io/instance: metrics-server\n"
+        "-    app.kubernetes.io/version: 0.8.0\n"
+        "-  annotations: null\n"
+        "+    app.kubernetes.io/version: 0.8.1\n"
+        "+  annotations:\n"
+        "+    noa.re/deploy-id: generated\n"
+        " spec:\n"
+        "   group: metrics.k8s.io\n"
+    )
+
+    filtered_diff = diffcomment.filter_metadata_hunks(
+        raw_diff,
+        {
+            ("metadata", "labels", "app.kubernetes.io/version"),
+            ("metadata", "annotations", "noa.re/deploy-id"),
+        },
+    )
+
+    assert filtered_diff == ""
+
+
 def test_build_comment_body_includes_metadata_summary_and_filtered_diff() -> None:
     comment = diffcomment.build_comment_body(
         "12",
