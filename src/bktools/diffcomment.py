@@ -352,19 +352,17 @@ def filter_file_hunks(
     if current_hunk is not None:
         hunks.append(current_hunk)
 
-    kept_hunks = [
-        hunk for hunk in hunks if not hunk_is_suppressed_metadata(hunk, suppress_paths)
-    ]
+    kept_hunks = []
+    for hunk in hunks:
+        if hunk_is_suppressed_metadata(hunk, suppress_paths):
+            continue
+        filtered_hunk = filter_suppressed_metadata_lines(hunk, suppress_paths)
+        if hunk_has_changed_lines(filtered_hunk):
+            kept_hunks.append(filtered_hunk)
+
     if not kept_hunks:
         return []
-    return [
-        *header,
-        *[
-            line
-            for hunk in kept_hunks
-            for line in filter_suppressed_metadata_lines(hunk, suppress_paths)
-        ],
-    ]
+    return [*header, *[line for hunk in kept_hunks for line in hunk]]
 
 
 def hunk_is_suppressed_metadata(
@@ -377,7 +375,7 @@ def hunk_is_suppressed_metadata(
 
 
 def changed_yaml_paths(hunk: list[str]) -> set[tuple[str, ...]]:
-    stack: list[tuple[int, str]] = []
+    stack = hunk_header_yaml_stack(hunk[0])
     changed_paths: set[tuple[str, ...]] = set()
     for line in hunk[1:]:
         if not line:
@@ -395,7 +393,19 @@ def changed_yaml_paths(hunk: list[str]) -> set[tuple[str, ...]]:
 def filter_suppressed_metadata_lines(
     hunk: list[str], suppress_paths: set[tuple[str, str, str]]
 ) -> list[str]:
-    stack: list[tuple[int, str]] = []
+    changed_paths = changed_yaml_paths(hunk)
+    suppressed_keys = {path[-1] for path in suppress_paths}
+    suppress_parent_paths = {
+        path[:2]
+        for path in suppress_paths
+        if not any(
+            len(changed_path) > 2
+            and changed_path[:2] == path[:2]
+            and changed_path not in suppress_paths
+            for changed_path in changed_paths
+        )
+    }
+    stack = hunk_header_yaml_stack(hunk[0])
     filtered = [hunk[0]]
     for line in hunk[1:]:
         if not line:
@@ -407,10 +417,35 @@ def filter_suppressed_metadata_lines(
             continue
         content = line[1:]
         path = yaml_mapping_path(content, stack)
-        if marker in "+-" and path in suppress_paths:
+        if marker in "+-" and (
+            path in suppress_paths
+            or path in suppress_parent_paths
+            or (
+                hunk_header_yaml_stack(hunk[0])
+                and yaml_mapping_key(content) in suppressed_keys
+            )
+        ):
             continue
         filtered.append(line)
     return filtered
+
+
+def hunk_has_changed_lines(hunk: list[str]) -> bool:
+    return any(line.startswith(("+", "-")) for line in hunk[1:])
+
+
+def hunk_header_yaml_stack(header: str) -> list[tuple[int, str]]:
+    match = re.match(r"^@@ .* @@\s+([^:\s][^:]*)\s*:\s*$", header)
+    if not match:
+        return []
+    return [(0, match.group(1).strip().strip("\"'"))]
+
+
+def yaml_mapping_key(line: str) -> str | None:
+    match = re.match(r"^\s*([^:#][^:]*):(?:\s.*)?$", line)
+    if not match:
+        return None
+    return match.group(1).strip().strip("\"'")
 
 
 def yaml_mapping_path(line: str, stack: list[tuple[int, str]]) -> tuple[str, ...]:

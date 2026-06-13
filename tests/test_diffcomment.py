@@ -375,6 +375,35 @@ def test_run_manifest_builder_diff_summarizes_repeated_metadata_and_filters_nois
     assert "image: example/app:v1.8.1" in manifest_diff.filtered_diff
 
 
+def test_filter_metadata_hunks_handles_metadata_context_headers() -> None:
+    raw_diff = (
+        "diff --git a/deployment.yaml b/deployment.yaml\n"
+        "index 1234567..89abcde 100644\n"
+        "--- a/deployment.yaml\n"
+        "+++ b/deployment.yaml\n"
+        "@@ -8,7 +8,9 @@ metadata:\n"
+        "     control-plane: envoy-gateway\n"
+        "     app.kubernetes.io/name: gateway-helm\n"
+        "     app.kubernetes.io/instance: envoy-gateway\n"
+        "-    app.kubernetes.io/version: v1.8.0\n"
+        "+    app.kubernetes.io/version: v1.8.1\n"
+        "+  annotations:\n"
+        "+    noa.re/deploy-id: generated\n"
+        " spec:\n"
+        "   replicas: 1\n"
+    )
+
+    filtered_diff = diffcomment.filter_metadata_hunks(
+        raw_diff,
+        {
+            ("metadata", "labels", "app.kubernetes.io/version"),
+            ("metadata", "annotations", "noa.re/deploy-id"),
+        },
+    )
+
+    assert filtered_diff == ""
+
+
 def test_build_comment_body_includes_metadata_summary_and_filtered_diff() -> None:
     comment = diffcomment.build_comment_body(
         "12",
