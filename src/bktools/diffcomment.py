@@ -16,6 +16,7 @@ from typing import cast
 
 import click
 import yaml
+from bktools.manifest_builder_on_checkout import run_manifest_builder_on_checkout
 from manifest_builder import __version__ as MANIFEST_BUILDER_VERSION
 
 
@@ -52,11 +53,15 @@ class CommentBody:
     help="Generated manifest output checkout to diff.",
 )
 @click.option(
+    "--repo",
+    help="Repository to shallow-clone as the manifest output before generation.",
+)
+@click.option(
     "--dump",
     is_flag=True,
     help="Write the generated GitHub comment body to stdout instead of posting it.",
 )
-def main(input_dir: Path | None, dump: bool) -> None:
+def main(input_dir: Path | None, repo: str | None, dump: bool) -> None:
     logging.basicConfig(
         format="%(asctime)s %(levelname)s %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
@@ -75,8 +80,7 @@ def main(input_dir: Path | None, dump: bool) -> None:
             )
             return
 
-    if input_dir is None:
-        raise click.UsageError("diffcomment requires --input")
+    input_dir = resolve_input_dir(input_dir, repo)
 
     logger.info("running manifest-builder diff for pull request #%s", pr_number)
     returncode, diff = run_manifest_builder_diff(input_dir)
@@ -108,6 +112,16 @@ def main(input_dir: Path | None, dump: bool) -> None:
     logger.info("posted manifest diff comment")
 
     raise click.exceptions.Exit(returncode)
+
+
+def resolve_input_dir(input_dir: Path | None, repo: str | None) -> Path:
+    if input_dir is not None and repo is not None:
+        raise click.UsageError("diffcomment accepts only one of --input or --repo")
+    if input_dir is not None:
+        return input_dir
+    if repo is not None:
+        return run_manifest_builder_on_checkout(repo, create_commit=False)
+    raise click.UsageError("diffcomment requires --input or --repo")
 
 
 def run_manifest_builder_diff(

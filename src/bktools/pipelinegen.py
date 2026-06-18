@@ -339,10 +339,9 @@ def diffcomment_pipeline_yaml(
                             "uv pip install --upgrade bktools \\",
                             '  --extra-index-url="https://repo.noa.re"',
                             (
-                                "checkout=$$(uv run manifest-builder-on-checkout --repo "
-                                f"{shlex.quote(target_repository)} --no-commit)"
+                                "uv run diffcomment --repo "
+                                f"{shlex.quote(target_repository)}"
                             ),
-                            "uv run diffcomment --input $$checkout",
                         ]
                     ),
                 }

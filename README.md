@@ -25,7 +25,7 @@ uv run pytest
     package publish step.
   - `variant = "manifest-builder"`: use `repo` as the manifest output
     repository. On pull request builds, generate a diff comment through the
-    checkout and `diffcomment` entrypoints. On other builds, clone the output
+    `diffcomment` entrypoint. On other builds, clone the output
     repository, run `manifest_builder.generate()` with the current checkout as
     input and the cloned repository as output, create a manifest commit, and push
     it through the `manifest-builder-on-checkout` entrypoint.
