@@ -9,13 +9,18 @@ from bktools import diffcomment
 
 
 @pytest.fixture(autouse=True)
-def clean_buildkite_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def clean_ci_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in (
         "BUILDKITE_PULL_REQUEST",
         "BUILDKITE_PULL_REQUEST_REPO",
         "BUILDKITE_REPO",
         "BUILDKITE_BUILD_URL",
         "BUILDKITE_COMMIT",
+        "GITHUB_EVENT_NAME",
+        "GITHUB_EVENT_PATH",
+        "GITHUB_REPOSITORY",
+        "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+        "ACTIONS_ID_TOKEN_REQUEST_URL",
         "BKTOOLS_GITHUB_PROXY_AUDIENCE",
         "BKTOOLS_GITHUB_PROXY_BASE_URL",
     ):
@@ -51,7 +56,9 @@ def test_main_posts_comment_for_pull_request(
             ),
         ),
     )
-    monkeypatch.setattr(diffcomment, "request_github_proxy_token", lambda: "token")
+    monkeypatch.setattr(
+        diffcomment, "request_github_proxy_token", lambda ci_system="buildkite": "token"
+    )
     monkeypatch.setattr(
         diffcomment,
         "post_issue_comment",
@@ -100,7 +107,9 @@ def test_main_dumps_comment_body_without_posting(
             diffcomment.ManifestDiff(stat="berries.yaml | 1 +\n", diff="diff"),
         ),
     )
-    monkeypatch.setattr(diffcomment, "request_github_proxy_token", lambda: "token")
+    monkeypatch.setattr(
+        diffcomment, "request_github_proxy_token", lambda ci_system="buildkite": "token"
+    )
     monkeypatch.setattr(
         diffcomment,
         "post_issue_comment",
@@ -168,6 +177,79 @@ def test_main_generates_input_checkout_from_repo(
     assert "output.yaml | 1 +" in result.stdout
 
 
+def test_main_posts_comment_for_github_actions_pull_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    posted = []
+    input_dir = tmp_path / "output"
+    event_path = tmp_path / "event.json"
+    input_dir.mkdir()
+    event_path.write_text('{"number": 42, "repository": {"full_name": "ignored/repo"}}')
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setenv("GITHUB_REPOSITORY", "nresare/berries-config")
+    monkeypatch.setattr(
+        diffcomment,
+        "run_manifest_builder_diff",
+        lambda input_dir: (
+            0,
+            diffcomment.ManifestDiff(stat="berries.yaml | 1 +\n", diff="diff"),
+        ),
+    )
+    monkeypatch.setattr(
+        diffcomment,
+        "request_github_proxy_token",
+        lambda ci_system="buildkite": f"{ci_system}-token",
+    )
+    monkeypatch.setattr(
+        diffcomment,
+        "post_issue_comment",
+        lambda token, owner, repo, pr_number, body: posted.append(
+            (token, owner, repo, pr_number, body)
+        ),
+    )
+
+    result = CliRunner().invoke(
+        diffcomment.main,
+        [
+            "--ci-system=github",
+            "--input",
+            str(input_dir),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert posted == [
+        (
+            "github-token",
+            "nresare",
+            "berries-config",
+            "42",
+            "```\n"
+            "berries.yaml | 1 +\n"
+            "```\n\n"
+            "```diff\n"
+            "diff\n"
+            "```\n\n"
+            f"manifest-builder version: `{diffcomment.MANIFEST_BUILDER_VERSION}`",
+        )
+    ]
+
+
+def test_main_skips_github_actions_non_pull_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    event_path = tmp_path / "event.json"
+    event_path.write_text('{"repository": {"full_name": "nresare/berries-config"}}')
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+
+    result = CliRunner().invoke(diffcomment.main, ["--ci-system=github"])
+
+    assert result.exit_code == 0
+    assert "skipping manifest diff comment" in result.stderr
+
+
 def test_main_uploads_full_diff_artifact_when_context_diff_is_omitted(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -189,7 +271,9 @@ def test_main_uploads_full_diff_artifact_when_context_diff_is_omitted(
             ),
         ),
     )
-    monkeypatch.setattr(diffcomment, "request_github_proxy_token", lambda: "token")
+    monkeypatch.setattr(
+        diffcomment, "request_github_proxy_token", lambda ci_system="buildkite": "token"
+    )
     monkeypatch.setattr(
         diffcomment,
         "post_issue_comment",
@@ -200,7 +284,9 @@ def test_main_uploads_full_diff_artifact_when_context_diff_is_omitted(
     monkeypatch.setattr(
         diffcomment,
         "upload_full_diff_artifact",
-        lambda repo_root: artifacts.append(repo_root),
+        lambda repo_root, ci_system="buildkite": artifacts.append(
+            (repo_root, ci_system)
+        ),
     )
 
     result = CliRunner().invoke(
@@ -211,7 +297,7 @@ def test_main_uploads_full_diff_artifact_when_context_diff_is_omitted(
     artifact_path = tmp_path / diffcomment.FULL_DIFF_ARTIFACT
     assert result.exit_code == 0
     assert artifact_path.read_text().startswith("berries.yaml | 1 +\n\n")
-    assert artifacts == [tmp_path]
+    assert artifacts == [(tmp_path, "buildkite")]
     assert diffcomment.FULL_DIFF_ARTIFACT in posted[0][4]
     assert "```diff" not in posted[0][4]
     assert posted[0][4].startswith("```\nberries.yaml | 1 +\n```")
@@ -532,6 +618,46 @@ def test_github_repo_prefers_pull_request_repo(
     assert diffcomment.github_repo() == ("fork", "source")
 
 
+def test_request_github_actions_proxy_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested = []
+    monkeypatch.setenv(
+        "ACTIONS_ID_TOKEN_REQUEST_URL", "https://actions.example/id-token?api=v1"
+    )
+    monkeypatch.setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "request-token")
+    monkeypatch.setenv("BKTOOLS_GITHUB_PROXY_AUDIENCE", "proxy.example")
+
+    class FakeResponse:
+        def read(self) -> bytes:
+            return b'{"value": "oidc-token"}'
+
+    class FakeUrlopen:
+        def __init__(self, request: object, timeout: int) -> None:
+            requested.append((request, timeout))
+
+        def __enter__(self) -> FakeResponse:
+            return FakeResponse()
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+    def fake_urlopen(request: object, timeout: int) -> FakeUrlopen:
+        return FakeUrlopen(request, timeout)
+
+    monkeypatch.setattr(diffcomment.urllib.request, "urlopen", fake_urlopen)
+
+    assert diffcomment.request_github_proxy_token("github") == "oidc-token"
+
+    request, timeout = requested[0]
+    assert timeout == 30
+    assert (
+        request.full_url
+        == "https://actions.example/id-token?api=v1&audience=proxy.example"
+    )
+    assert request.headers["Authorization"] == "Bearer request-token"
+
+
 def test_build_comment_body_excludes_build_metadata_and_includes_version(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -601,3 +727,18 @@ def test_build_comment_body_omits_context_diff_when_too_large() -> None:
     assert "```diff" not in comment.body
     assert diffcomment.FULL_DIFF_ARTIFACT in comment.body
     assert comment.omitted_context_diff
+
+
+def test_build_comment_body_can_use_github_actions_artifact_wording() -> None:
+    comment = diffcomment.build_comment_body(
+        "12",
+        0,
+        diffcomment.ManifestDiff(
+            stat="file.yaml | 1 +\n",
+            diff="x" * diffcomment.MAX_COMMENT_CHARS,
+        ),
+        full_diff_reference=diffcomment.full_diff_reference("github"),
+    )
+
+    assert "GitHub Actions artifact" in comment.body
+    assert "Buildkite artifact" not in comment.body

@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import Counter
 from collections.abc import Mapping
@@ -29,6 +30,7 @@ DEPLOY_ID_METADATA_PATH = ("metadata", "annotations", "noa.re/deploy-id")
 METADATA_SUMMARY_THRESHOLD = 2
 
 logger = logging.getLogger("diffcomment")
+CiSystem = str
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,13 @@ class ManifestDiff:
 class CommentBody:
     body: str
     omitted_context_diff: bool
+
+
+@dataclass(frozen=True)
+class CiContext:
+    pull_request_number: str | None
+    owner: str | None = None
+    repo: str | None = None
 
 
 @click.command()
@@ -61,7 +70,16 @@ class CommentBody:
     is_flag=True,
     help="Write the generated GitHub comment body to stdout instead of posting it.",
 )
-def main(input_dir: Path | None, repo: str | None, dump: bool) -> None:
+@click.option(
+    "--ci-system",
+    type=click.Choice(["buildkite", "github"]),
+    default="buildkite",
+    show_default=True,
+    help="CI system environment to read.",
+)
+def main(
+    input_dir: Path | None, repo: str | None, dump: bool, ci_system: CiSystem
+) -> None:
     logging.basicConfig(
         format="%(asctime)s %(levelname)s %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
@@ -70,8 +88,9 @@ def main(input_dir: Path | None, repo: str | None, dump: bool) -> None:
         force=True,
     )
 
-    pr_number = os.environ.get("BUILDKITE_PULL_REQUEST")
-    if not pr_number or pr_number == "false":
+    ci_context = read_ci_context(ci_system)
+    pr_number = ci_context.pull_request_number
+    if pr_number is None:
         if dump:
             pr_number = "local"
         else:
@@ -86,7 +105,9 @@ def main(input_dir: Path | None, repo: str | None, dump: bool) -> None:
     returncode, diff = run_manifest_builder_diff(input_dir)
     logger.info("manifest-builder diff exited with code %s", returncode)
 
-    comment = build_comment_body(pr_number, returncode, diff)
+    comment = build_comment_body(
+        pr_number, returncode, diff, full_diff_reference=full_diff_reference(ci_system)
+    )
     if dump:
         logger.info(
             "writing manifest diff comment body to stdout instead of posting to GitHub"
@@ -96,19 +117,25 @@ def main(input_dir: Path | None, repo: str | None, dump: bool) -> None:
 
     if comment.omitted_context_diff:
         write_full_diff_artifact(Path.cwd(), diff)
-        upload_full_diff_artifact(Path.cwd())
+        upload_full_diff_artifact(Path.cwd(), ci_system=ci_system)
 
-    owner, repo = github_repo()
+    owner, repo_name = ci_context.owner, ci_context.repo
+    if (owner is None or repo_name is None) and ci_system == "buildkite":
+        owner, repo_name = github_repo()
+    if owner is None or repo_name is None:
+        raise click.ClickException(
+            f"could not infer GitHub repository from {ci_system} environment"
+        )
     logger.info("requesting GitHub API proxy token for GitHub comment")
-    token = request_github_proxy_token()
+    token = request_github_proxy_token(ci_system)
 
     logger.info(
         "posting manifest diff comment to %s/%s pull request #%s",
         owner,
-        repo,
+        repo_name,
         pr_number,
     )
-    post_issue_comment(token, owner, repo, pr_number, comment.body)
+    post_issue_comment(token, owner, repo_name, pr_number, comment.body)
     logger.info("posted manifest diff comment")
 
     raise click.exceptions.Exit(returncode)
@@ -122,6 +149,79 @@ def resolve_input_dir(input_dir: Path | None, repo: str | None) -> Path:
     if repo is not None:
         return run_manifest_builder_on_checkout(repo, create_commit=False)
     raise click.UsageError("diffcomment requires --input or --repo")
+
+
+def read_ci_context(ci_system: CiSystem) -> CiContext:
+    if ci_system == "buildkite":
+        return read_buildkite_context()
+    if ci_system == "github":
+        return read_github_actions_context()
+    raise ValueError(f"unsupported CI system: {ci_system}")
+
+
+def read_buildkite_context() -> CiContext:
+    pr_number = os.environ.get("BUILDKITE_PULL_REQUEST")
+    if not pr_number or pr_number == "false":
+        return CiContext(pull_request_number=None)
+    return CiContext(pull_request_number=pr_number)
+
+
+def read_github_actions_context() -> CiContext:
+    if os.environ.get("GITHUB_EVENT_NAME") not in (
+        "pull_request",
+        "pull_request_target",
+    ):
+        return CiContext(pull_request_number=None)
+
+    event = read_github_event()
+    pr_number = event.get("number")
+    if not isinstance(pr_number, int | str):
+        raise click.ClickException(
+            "could not infer pull request number from GitHub event"
+        )
+
+    full_name = os.environ.get("GITHUB_REPOSITORY") or github_event_repository(event)
+    owner, repo = parse_github_repository_name(full_name)
+    return CiContext(
+        pull_request_number=str(pr_number),
+        owner=owner,
+        repo=repo,
+    )
+
+
+def read_github_event() -> dict[str, object]:
+    event_path = os.environ.get("GITHUB_EVENT_PATH")
+    if not event_path:
+        raise click.ClickException(
+            "GITHUB_EVENT_PATH is required for --ci-system=github"
+        )
+
+    event = json.loads(Path(event_path).read_text())
+    if not isinstance(event, dict):
+        raise click.ClickException("GitHub event payload must be a JSON object")
+    return event
+
+
+def github_event_repository(event: Mapping[str, object]) -> str:
+    repository = event.get("repository")
+    if not isinstance(repository, Mapping):
+        raise click.ClickException(
+            "could not infer GitHub repository from event payload"
+        )
+
+    full_name = repository.get("full_name")
+    if not isinstance(full_name, str) or not full_name:
+        raise click.ClickException(
+            "could not infer GitHub repository from event payload"
+        )
+    return full_name
+
+
+def parse_github_repository_name(full_name: str) -> tuple[str, str]:
+    parts = full_name.split("/", 1)
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        raise click.ClickException(f"invalid GitHub repository name: {full_name!r}")
+    return parts[0], parts[1]
 
 
 def run_manifest_builder_diff(
@@ -508,7 +608,18 @@ def render_full_diff_artifact(diff: ManifestDiff) -> str:
     return "\n\n".join(sections) + "\n"
 
 
-def upload_full_diff_artifact(repo_root: Path) -> None:
+def upload_full_diff_artifact(
+    repo_root: Path, ci_system: CiSystem = "buildkite"
+) -> None:
+    if ci_system == "github":
+        logger.info(
+            "leaving full manifest diff artifact %s for GitHub Actions upload",
+            repo_root / FULL_DIFF_ARTIFACT,
+        )
+        return
+    if ci_system != "buildkite":
+        raise ValueError(f"unsupported CI system: {ci_system}")
+
     logger.info("uploading full manifest diff artifact %s", FULL_DIFF_ARTIFACT)
     subprocess.run(
         ["buildkite-agent", "artifact", "upload", FULL_DIFF_ARTIFACT],
@@ -529,7 +640,15 @@ def github_repo() -> tuple[str, str]:
     return match.group(1), match.group(2)
 
 
-def request_github_proxy_token() -> str:
+def request_github_proxy_token(ci_system: CiSystem = "buildkite") -> str:
+    if ci_system == "buildkite":
+        return request_buildkite_github_proxy_token()
+    if ci_system == "github":
+        return request_github_actions_proxy_token()
+    raise ValueError(f"unsupported CI system: {ci_system}")
+
+
+def request_buildkite_github_proxy_token() -> str:
     audience = os.environ.get("BKTOOLS_GITHUB_PROXY_AUDIENCE", GITHUB_PROXY_AUDIENCE)
     return subprocess.check_output(
         ["buildkite-agent", "oidc", "request-token", "--audience", audience],
@@ -537,10 +656,55 @@ def request_github_proxy_token() -> str:
     ).strip()
 
 
+def request_github_actions_proxy_token() -> str:
+    audience = os.environ.get("BKTOOLS_GITHUB_PROXY_AUDIENCE", GITHUB_PROXY_AUDIENCE)
+    request_url = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL")
+    request_token = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+    if not request_url or not request_token:
+        raise click.ClickException(
+            "GitHub Actions OIDC token environment is required for --ci-system=github"
+        )
+
+    separator = "&" if "?" in request_url else "?"
+    url = f"{request_url}{separator}{urllib.parse.urlencode({'audience': audience})}"
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {request_token}",
+            "Accept": "application/json",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        payload = json.loads(response.read())
+
+    value = payload.get("value") if isinstance(payload, dict) else None
+    if not isinstance(value, str) or not value:
+        raise click.ClickException(
+            "GitHub Actions OIDC response did not contain a token"
+        )
+    return value
+
+
+def full_diff_reference(ci_system: CiSystem) -> str:
+    if ci_system == "buildkite":
+        return f"uploaded as Buildkite artifact `{FULL_DIFF_ARTIFACT}`"
+    if ci_system == "github":
+        return (
+            f"written to `{FULL_DIFF_ARTIFACT}` for upload as a GitHub Actions artifact"
+        )
+    raise ValueError(f"unsupported CI system: {ci_system}")
+
+
 def build_comment_body(
-    pr_number: str, returncode: int, diff: ManifestDiff
+    pr_number: str,
+    returncode: int,
+    diff: ManifestDiff,
+    full_diff_reference: str | None = None,
 ) -> CommentBody:
     del pr_number
+    full_diff_reference = full_diff_reference or (
+        f"uploaded as Buildkite artifact `{FULL_DIFF_ARTIFACT}`"
+    )
 
     metadata = [f"manifest-builder version: `{MANIFEST_BUILDER_VERSION}`"]
 
@@ -575,7 +739,7 @@ def build_comment_body(
                 "",
                 (
                     "_Repeated metadata-only changes have been summarized or omitted. "
-                    f"The full diff has been uploaded as Buildkite artifact `{FULL_DIFF_ARTIFACT}`._"
+                    f"The full diff has been {full_diff_reference}._"
                 ),
             ]
         )
@@ -601,7 +765,7 @@ def build_comment_body(
             "",
             (
                 "_The full context diff is too large for a GitHub comment and "
-                f"has been uploaded as Buildkite artifact `{FULL_DIFF_ARTIFACT}`._"
+                f"has been {full_diff_reference}._"
             ),
             "",
             *metadata,

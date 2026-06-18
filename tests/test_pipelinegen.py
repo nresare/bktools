@@ -21,6 +21,15 @@ from bktools.pipelinegen import (
 )
 
 
+@pytest.fixture(autouse=True)
+def clean_buildkite_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        "BUILDKITE_BRANCH",
+        "BUILDKITE_PULL_REQUEST",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
 def assert_docker_publish_step(
     pipeline: str, *, depends_on: str, tag: str = "0.1.0-deadbeef"
 ) -> None:

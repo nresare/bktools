@@ -45,6 +45,9 @@ uv run pytest
 - `bktools-image-version-hash`: hash a Docker build context and optionally emit a
   Docker tag. The base version comes from `Cargo.toml` when present, otherwise
   from the nearest reachable `vX.Y.Z` git tag.
+- `diffcomment`: generate a manifest diff comment for a pull request. It reads
+  Buildkite environment variables by default; pass `--ci-system=github` to read
+  GitHub Actions pull request context and OIDC token environment instead.
 - `notify-relcoord`: notify a relcoord endpoint about a published container
   image. The tool takes the endpoint as a positional argument, requests a
   Buildkite OIDC token for that audience, and posts the current
