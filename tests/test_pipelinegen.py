@@ -160,10 +160,9 @@ def test_diffcomment_pipeline_yaml_posts_manifest_diff_comment() -> None:
     assert '--extra-index-url="https://repo.noa.re"' in pipeline
     assert "--pre" not in pipeline
     assert (
-        "checkout=$$(uv run manifest-builder-on-checkout --repo "
-        "https://github.com/nresare/manifests.git --no-commit)"
-    ) in pipeline
-    assert "uv run diffcomment --input $$checkout" in pipeline
+        "uv run diffcomment --repo https://github.com/nresare/manifests.git" in pipeline
+    )
+    assert "manifest-builder-on-checkout" not in pipeline
     assert "manifest_builder_main" not in pipeline
 
 
@@ -209,10 +208,9 @@ def test_pipeline_yaml_dispatches_manifest_builder_pr_to_diffcomment() -> None:
     )
 
     assert (
-        "checkout=$$(uv run manifest-builder-on-checkout --repo "
-        "https://github.com/nresare/manifests.git --no-commit)"
-    ) in pipeline
-    assert "uv run diffcomment --input $$checkout" in pipeline
+        "uv run diffcomment --repo https://github.com/nresare/manifests.git" in pipeline
+    )
+    assert "manifest-builder-on-checkout" not in pipeline
 
 
 def test_pipeline_yaml_requires_manifest_builder_config() -> None:
@@ -430,10 +428,10 @@ def test_main_uses_diffcomment_for_manifest_builder_pull_request(
 
     captured = capsys.readouterr()
     assert (
-        "checkout=$$(uv run manifest-builder-on-checkout --repo "
-        "https://github.com/nresare/manifests.git --no-commit)"
-    ) in captured.out
-    assert "uv run diffcomment --input $$checkout" in captured.out
+        "uv run diffcomment --repo https://github.com/nresare/manifests.git"
+        in captured.out
+    )
+    assert "manifest-builder-on-checkout" not in captured.out
 
 
 def test_main_skips_manifest_builder_when_not_pull_request_or_main(

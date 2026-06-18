@@ -131,6 +131,43 @@ def test_main_dumps_comment_body_without_posting(
     assert posted == []
 
 
+def test_main_generates_input_checkout_from_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    generated_dir = tmp_path / "output"
+    generated_dir.mkdir()
+    calls = []
+    monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "42")
+    monkeypatch.setattr(
+        diffcomment,
+        "run_manifest_builder_on_checkout",
+        lambda repo, *, create_commit: (
+            calls.append((repo, create_commit)) or generated_dir
+        ),
+    )
+    monkeypatch.setattr(
+        diffcomment,
+        "run_manifest_builder_diff",
+        lambda input_dir: (
+            0,
+            diffcomment.ManifestDiff(stat=f"{input_dir.name}.yaml | 1 +\n", diff=""),
+        ),
+    )
+
+    result = CliRunner().invoke(
+        diffcomment.main,
+        [
+            "--dump",
+            "--repo",
+            "https://github.com/nresare/manifests.git",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [("https://github.com/nresare/manifests.git", False)]
+    assert "output.yaml | 1 +" in result.stdout
+
+
 def test_main_uploads_full_diff_artifact_when_context_diff_is_omitted(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -208,7 +245,7 @@ def test_main_dump_works_outside_pull_request(
     assert "```diff\ndiff\n```" in result.stdout
 
 
-def test_main_requires_input_for_pull_request(
+def test_main_requires_input_or_repo_for_pull_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "42")
@@ -216,7 +253,28 @@ def test_main_requires_input_for_pull_request(
     result = CliRunner().invoke(diffcomment.main)
 
     assert result.exit_code == 2
-    assert "requires --input" in result.output
+    assert "requires --input or --repo" in result.output
+
+
+def test_main_rejects_input_and_repo_together(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    input_dir = tmp_path / "output"
+    input_dir.mkdir()
+    monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "42")
+
+    result = CliRunner().invoke(
+        diffcomment.main,
+        [
+            "--input",
+            str(input_dir),
+            "--repo",
+            "https://github.com/nresare/manifests.git",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "only one of --input or --repo" in result.output
 
 
 def test_run_manifest_builder_diff_captures_git_diff(
