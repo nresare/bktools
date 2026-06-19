@@ -18,8 +18,10 @@ def test_run_manifest_builder_on_checkout_clones_generates_commit_and_pushes(
         calls.append(call)
         return subprocess.CompletedProcess(args, 0)
 
-    def fake_generate(config: Path, output: Path, create_commit: bool) -> set[Path]:
-        calls.append(("generate", config, output.name, create_commit))
+    def fake_generate(
+        config: Path, output: Path, create_commit: bool, vars_from: Path | None
+    ) -> set[Path]:
+        calls.append(("generate", config, output.name, create_commit, vars_from))
         return set()
 
     monkeypatch.setattr(manifest_builder_on_checkout.subprocess, "run", fake_run)
@@ -44,7 +46,7 @@ def test_run_manifest_builder_on_checkout_clones_generates_commit_and_pushes(
             None,
             True,
         ),
-        ("generate", manifest_config, "output", True),
+        ("generate", manifest_config, "output", True, None),
         ("run", ["git", "push"], calls[2][2], True),
     ]
     assert Path(calls[0][1][-1]).name == "output"
@@ -61,8 +63,10 @@ def test_run_manifest_builder_on_checkout_can_skip_commit_and_push(
         calls.append(("run", args, kwargs.get("cwd"), kwargs["check"]))
         return subprocess.CompletedProcess(args, 0)
 
-    def fake_generate(config: Path, output: Path, create_commit: bool) -> set[Path]:
-        calls.append(("generate", config, output.name, create_commit))
+    def fake_generate(
+        config: Path, output: Path, create_commit: bool, vars_from: Path | None
+    ) -> set[Path]:
+        calls.append(("generate", config, output.name, create_commit, vars_from))
         return set()
 
     monkeypatch.setattr(manifest_builder_on_checkout.subprocess, "run", fake_run)
@@ -88,7 +92,7 @@ def test_run_manifest_builder_on_checkout_can_skip_commit_and_push(
             None,
             True,
         ),
-        ("generate", manifest_config, "output", False),
+        ("generate", manifest_config, "output", False, None),
     ]
 
 
@@ -102,7 +106,9 @@ def test_run_manifest_builder_on_checkout_injects_clone_token(
         calls.append(args)
         return subprocess.CompletedProcess(args, 0)
 
-    def fake_generate(config: Path, output: Path, create_commit: bool) -> set[Path]:
+    def fake_generate(
+        config: Path, output: Path, create_commit: bool, vars_from: Path | None
+    ) -> set[Path]:
         return set()
 
     monkeypatch.setattr(manifest_builder_on_checkout.subprocess, "run", fake_run)
@@ -122,6 +128,34 @@ def test_run_manifest_builder_on_checkout_injects_clone_token(
         "1",
         "https://x-access-token:secret%20token@github.com/nresare/manifests.git",
     ]
+
+
+def test_run_manifest_builder_on_checkout_forwards_vars_from(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest_config = tmp_path / "conf"
+    generate_calls = []
+
+    def fake_run(args: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args, 0)
+
+    def fake_generate(
+        config: Path, output: Path, create_commit: bool, vars_from: Path | None
+    ) -> set[Path]:
+        generate_calls.append(vars_from)
+        return set()
+
+    monkeypatch.setattr(manifest_builder_on_checkout.subprocess, "run", fake_run)
+    monkeypatch.setattr(manifest_builder_on_checkout, "generate", fake_generate)
+
+    manifest_builder_on_checkout.run_manifest_builder_on_checkout(
+        "https://github.com/nresare/manifests.git",
+        manifest_config,
+        create_commit=False,
+        vars_from=Path("ci-vars.toml"),
+    )
+
+    assert generate_calls == [Path("ci-vars.toml")]
 
 
 def test_inject_clone_token_rejects_non_http_url() -> None:
