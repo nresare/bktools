@@ -167,7 +167,7 @@ def test_main_generates_input_checkout_from_repo(
         diffcomment.main,
         [
             "--dump",
-            "--repo",
+            "--target-repo",
             "https://github.com/nresare/manifests.git",
         ],
     )
@@ -339,7 +339,7 @@ def test_main_requires_input_or_repo_for_pull_request(
     result = CliRunner().invoke(diffcomment.main)
 
     assert result.exit_code == 2
-    assert "requires --input or --repo" in result.output
+    assert "requires --input or --target-repo" in result.output
 
 
 def test_main_rejects_input_and_repo_together(
@@ -354,13 +354,13 @@ def test_main_rejects_input_and_repo_together(
         [
             "--input",
             str(input_dir),
-            "--repo",
+            "--target-repo",
             "https://github.com/nresare/manifests.git",
         ],
     )
 
     assert result.exit_code == 2
-    assert "only one of --input or --repo" in result.output
+    assert "only one of --input or --target-repo" in result.output
 
 
 def test_run_manifest_builder_diff_captures_git_diff(

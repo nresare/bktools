@@ -169,7 +169,8 @@ def test_diffcomment_pipeline_yaml_posts_manifest_diff_comment() -> None:
     assert '--extra-index-url="https://repo.noa.re"' in pipeline
     assert "--pre" not in pipeline
     assert (
-        "uv run diffcomment --repo https://github.com/nresare/manifests.git" in pipeline
+        "uv run diffcomment --target-repo https://github.com/nresare/manifests.git"
+        in pipeline
     )
     assert "manifest-builder-on-checkout" not in pipeline
     assert "manifest_builder_main" not in pipeline
@@ -217,7 +218,8 @@ def test_pipeline_yaml_dispatches_manifest_builder_pr_to_diffcomment() -> None:
     )
 
     assert (
-        "uv run diffcomment --repo https://github.com/nresare/manifests.git" in pipeline
+        "uv run diffcomment --target-repo https://github.com/nresare/manifests.git"
+        in pipeline
     )
     assert "manifest-builder-on-checkout" not in pipeline
 
@@ -437,7 +439,7 @@ def test_main_uses_diffcomment_for_manifest_builder_pull_request(
 
     captured = capsys.readouterr()
     assert (
-        "uv run diffcomment --repo https://github.com/nresare/manifests.git"
+        "uv run diffcomment --target-repo https://github.com/nresare/manifests.git"
         in captured.out
     )
     assert "manifest-builder-on-checkout" not in captured.out

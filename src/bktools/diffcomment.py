@@ -62,7 +62,7 @@ class CiContext:
     help="Generated manifest output checkout to diff.",
 )
 @click.option(
-    "--repo",
+    "--target-repo",
     help="Repository to shallow-clone as the manifest output before generation.",
 )
 @click.option(
@@ -78,7 +78,7 @@ class CiContext:
     help="CI system environment to read.",
 )
 def main(
-    input_dir: Path | None, repo: str | None, dump: bool, ci_system: CiSystem
+    input_dir: Path | None, target_repo: str | None, dump: bool, ci_system: CiSystem
 ) -> None:
     logging.basicConfig(
         format="%(asctime)s %(levelname)s %(message)s",
@@ -99,7 +99,7 @@ def main(
             )
             return
 
-    input_dir = resolve_input_dir(input_dir, repo)
+    input_dir = resolve_input_dir(input_dir, target_repo)
 
     logger.info("running manifest-builder diff for pull request #%s", pr_number)
     returncode, diff = run_manifest_builder_diff(input_dir)
@@ -141,14 +141,16 @@ def main(
     raise click.exceptions.Exit(returncode)
 
 
-def resolve_input_dir(input_dir: Path | None, repo: str | None) -> Path:
-    if input_dir is not None and repo is not None:
-        raise click.UsageError("diffcomment accepts only one of --input or --repo")
+def resolve_input_dir(input_dir: Path | None, target_repo: str | None) -> Path:
+    if input_dir is not None and target_repo is not None:
+        raise click.UsageError(
+            "diffcomment accepts only one of --input or --target-repo"
+        )
     if input_dir is not None:
         return input_dir
-    if repo is not None:
-        return run_manifest_builder_on_checkout(repo, create_commit=False)
-    raise click.UsageError("diffcomment requires --input or --repo")
+    if target_repo is not None:
+        return run_manifest_builder_on_checkout(target_repo, create_commit=False)
+    raise click.UsageError("diffcomment requires --input or --target-repo")
 
 
 def read_ci_context(ci_system: CiSystem) -> CiContext:

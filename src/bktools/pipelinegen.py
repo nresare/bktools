@@ -339,7 +339,7 @@ def diffcomment_pipeline_yaml(
                             "uv pip install --upgrade bktools \\",
                             '  --extra-index-url="https://repo.noa.re"',
                             (
-                                "uv run diffcomment --repo "
+                                "uv run diffcomment --target-repo "
                                 f"{shlex.quote(target_repository)}"
                             ),
                         ]
