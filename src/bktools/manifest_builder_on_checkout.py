@@ -47,20 +47,24 @@ def run_manifest_builder_on_checkout(
     create_commit: bool = True,
     clone_token: str | None = None,
     vars_from: Path | None = None,
+    output_subdir: str | None = None,
 ) -> Path:
     tmpdir = tempfile.mkdtemp(prefix="bktools-manifest-builder-")
     output_dir = Path(tmpdir) / "output"
     clone_output_repository(repo, output_dir, clone_token=clone_token)
-    logger.info("generating manifests from %s into %s", manifest_config_dir, output_dir)
+    generate_dir = output_dir / output_subdir if output_subdir else output_dir
+    logger.info(
+        "generating manifests from %s into %s", manifest_config_dir, generate_dir
+    )
     generate(
         manifest_config_dir,
-        output_dir,
+        generate_dir,
         create_commit=create_commit,
         vars_from=vars_from,
     )
     if create_commit:
         push_output_repository(output_dir)
-    return output_dir
+    return generate_dir
 
 
 def clone_output_repository(

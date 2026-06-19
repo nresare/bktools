@@ -56,6 +56,13 @@ class CiContext:
     ),
 )
 @click.option(
+    "--target-subdir",
+    help=(
+        "Subdirectory of the cloned --target-repo to generate into and diff, "
+        "instead of the repository root."
+    ),
+)
+@click.option(
     "--vars-from",
     type=click.Path(path_type=Path),
     help="TOML file of extra template variables passed through to manifest-builder.",
@@ -80,6 +87,7 @@ def main(
     input_dir: Path | None,
     target_repo: str | None,
     target_clone_token: str | None,
+    target_subdir: str | None,
     vars_from: Path | None,
     pr_comment_token: str | None,
     dump: bool,
@@ -110,7 +118,7 @@ def main(
         )
 
     input_dir = prepare_manifest_dir(
-        input_dir, target_repo, target_clone_token, vars_from
+        input_dir, target_repo, target_clone_token, vars_from, target_subdir
     )
 
     logger.info("running manifest-builder diff for pull request #%s", pr_number)
@@ -157,6 +165,7 @@ def prepare_manifest_dir(
     target_repo: str | None,
     target_clone_token: str | None = None,
     vars_from: Path | None = None,
+    target_subdir: str | None = None,
 ) -> Path:
     if input_dir is not None and target_repo is not None:
         raise click.UsageError(
@@ -170,6 +179,7 @@ def prepare_manifest_dir(
             create_commit=False,
             clone_token=target_clone_token,
             vars_from=vars_from,
+            output_subdir=target_subdir,
         )
     raise click.UsageError("diffcomment requires --input or --target-repo")
 

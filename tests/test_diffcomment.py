@@ -141,8 +141,9 @@ def test_main_generates_input_checkout_from_repo(
     monkeypatch.setattr(
         diffcomment,
         "run_manifest_builder_on_checkout",
-        lambda repo, *, create_commit, clone_token, vars_from: (
-            calls.append((repo, create_commit, clone_token, vars_from)) or generated_dir
+        lambda repo, *, create_commit, clone_token, vars_from, output_subdir: (
+            calls.append((repo, create_commit, clone_token, vars_from, output_subdir))
+            or generated_dir
         ),
     )
     monkeypatch.setattr(
@@ -164,7 +165,9 @@ def test_main_generates_input_checkout_from_repo(
     )
 
     assert result.exit_code == 0
-    assert calls == [("https://github.com/nresare/manifests.git", False, None, None)]
+    assert calls == [
+        ("https://github.com/nresare/manifests.git", False, None, None, None)
+    ]
     assert "output.yaml | 1 +" in result.stdout
 
 
@@ -178,8 +181,9 @@ def test_main_forwards_target_clone_token(
     monkeypatch.setattr(
         diffcomment,
         "run_manifest_builder_on_checkout",
-        lambda repo, *, create_commit, clone_token, vars_from: (
-            calls.append((repo, create_commit, clone_token, vars_from)) or generated_dir
+        lambda repo, *, create_commit, clone_token, vars_from, output_subdir: (
+            calls.append((repo, create_commit, clone_token, vars_from, output_subdir))
+            or generated_dir
         ),
     )
     monkeypatch.setattr(
@@ -201,7 +205,7 @@ def test_main_forwards_target_clone_token(
 
     assert result.exit_code == 0
     assert calls == [
-        ("https://github.com/nresare/manifests.git", False, "clone-token", None)
+        ("https://github.com/nresare/manifests.git", False, "clone-token", None, None)
     ]
 
 
@@ -215,8 +219,9 @@ def test_main_forwards_vars_from(
     monkeypatch.setattr(
         diffcomment,
         "run_manifest_builder_on_checkout",
-        lambda repo, *, create_commit, clone_token, vars_from: (
-            calls.append((repo, create_commit, clone_token, vars_from)) or generated_dir
+        lambda repo, *, create_commit, clone_token, vars_from, output_subdir: (
+            calls.append((repo, create_commit, clone_token, vars_from, output_subdir))
+            or generated_dir
         ),
     )
     monkeypatch.setattr(
@@ -238,7 +243,51 @@ def test_main_forwards_vars_from(
 
     assert result.exit_code == 0
     assert calls == [
-        ("https://github.com/nresare/manifests.git", False, None, Path("ci-vars.toml"))
+        (
+            "https://github.com/nresare/manifests.git",
+            False,
+            None,
+            Path("ci-vars.toml"),
+            None,
+        )
+    ]
+
+
+def test_main_forwards_target_subdir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    generated_dir = tmp_path / "output"
+    generated_dir.mkdir()
+    calls = []
+    monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "42")
+    monkeypatch.setattr(
+        diffcomment,
+        "run_manifest_builder_on_checkout",
+        lambda repo, *, create_commit, clone_token, vars_from, output_subdir: (
+            calls.append((repo, create_commit, clone_token, vars_from, output_subdir))
+            or generated_dir
+        ),
+    )
+    monkeypatch.setattr(
+        diffcomment,
+        "run_manifest_builder_diff",
+        lambda input_dir: (0, diffcomment.ManifestDiff(stat="", diff="")),
+    )
+
+    result = CliRunner().invoke(
+        diffcomment.main,
+        [
+            "--dump",
+            "--target-repo",
+            "https://github.com/nresare/manifests.git",
+            "--target-subdir",
+            "platform-dev",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [
+        ("https://github.com/nresare/manifests.git", False, None, None, "platform-dev")
     ]
 
 
