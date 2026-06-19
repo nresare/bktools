@@ -14,6 +14,7 @@ dependencies = [
 pipelinegen = "bktools.pipelinegen:main"
 bktools-image-version-hash = "bktools.image_version_hash:main"
 diffcomment = "bktools.diffcomment:main"
+get-installation-token = "bktools.get_installation_token:main"
 manifest-builder-on-checkout = "bktools.manifest_builder_on_checkout:main"
 notify-relcoord = "bktools.notify_relcoord:main"
 

@@ -23,6 +23,7 @@ VALID_OUTPUTS = ("container",)
 PYTHON_PACKAGE_REGISTRY = "nresare/python"
 DEFAULT_AGENTS = {"speed": "fast"}
 CONTAINER_REGISTRY = "repo.noa.re"
+IDCAT_ENDPOINT = "https://idcat.noa.re"
 BKTOOLS_INSTALL_COMMAND = (
     'uv pip install bktools --extra-index-url="https://repo.noa.re"'
 )
@@ -339,8 +340,14 @@ def diffcomment_pipeline_yaml(
                             "uv pip install --upgrade bktools \\",
                             '  --extra-index-url="https://repo.noa.re"',
                             (
+                                "pr_comment_token=$$(uv run get-installation-token "
+                                f"--endpoint {IDCAT_ENDPOINT} "
+                                '--repo "$$BUILDKITE_REPO")'
+                            ),
+                            (
                                 "uv run diffcomment --target-repo "
-                                f"{shlex.quote(target_repository)}"
+                                f"{shlex.quote(target_repository)} "
+                                '--pr-comment-token "$$pr_comment_token"'
                             ),
                         ]
                     ),

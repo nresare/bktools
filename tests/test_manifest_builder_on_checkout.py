@@ -92,6 +92,45 @@ def test_run_manifest_builder_on_checkout_can_skip_commit_and_push(
     ]
 
 
+def test_run_manifest_builder_on_checkout_injects_clone_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest_config = tmp_path / "conf"
+    calls = []
+
+    def fake_run(args: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0)
+
+    def fake_generate(config: Path, output: Path, create_commit: bool) -> set[Path]:
+        return set()
+
+    monkeypatch.setattr(manifest_builder_on_checkout.subprocess, "run", fake_run)
+    monkeypatch.setattr(manifest_builder_on_checkout, "generate", fake_generate)
+
+    manifest_builder_on_checkout.run_manifest_builder_on_checkout(
+        "https://github.com/nresare/manifests.git",
+        manifest_config,
+        create_commit=False,
+        clone_token="secret token",
+    )
+
+    assert calls[0][:5] == [
+        "git",
+        "clone",
+        "--depth",
+        "1",
+        "https://x-access-token:secret%20token@github.com/nresare/manifests.git",
+    ]
+
+
+def test_inject_clone_token_rejects_non_http_url() -> None:
+    with pytest.raises(Exception, match="http"):
+        manifest_builder_on_checkout.inject_clone_token(
+            "git@github.com:nresare/manifests.git", "token"
+        )
+
+
 def test_manifest_builder_on_checkout_cli_requires_repo() -> None:
     result = CliRunner().invoke(manifest_builder_on_checkout.main)
 
