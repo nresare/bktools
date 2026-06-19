@@ -158,6 +158,36 @@ def test_run_manifest_builder_on_checkout_forwards_vars_from(
     assert generate_calls == [Path("ci-vars.toml")]
 
 
+def test_run_manifest_builder_on_checkout_generates_into_subdir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest_config = tmp_path / "conf"
+    generate_outputs = []
+
+    def fake_run(args: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args, 0)
+
+    def fake_generate(
+        config: Path, output: Path, create_commit: bool, vars_from: Path | None
+    ) -> set[Path]:
+        generate_outputs.append(output)
+        return set()
+
+    monkeypatch.setattr(manifest_builder_on_checkout.subprocess, "run", fake_run)
+    monkeypatch.setattr(manifest_builder_on_checkout, "generate", fake_generate)
+
+    result = manifest_builder_on_checkout.run_manifest_builder_on_checkout(
+        "https://github.com/nresare/manifests.git",
+        manifest_config,
+        create_commit=False,
+        output_subdir="platform-dev",
+    )
+
+    assert generate_outputs[0].name == "platform-dev"
+    assert generate_outputs[0].parent.name == "output"
+    assert result == generate_outputs[0]
+
+
 def test_inject_clone_token_rejects_non_http_url() -> None:
     with pytest.raises(Exception, match="http"):
         manifest_builder_on_checkout.inject_clone_token(
