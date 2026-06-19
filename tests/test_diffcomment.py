@@ -5,7 +5,7 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-from bktools import diffcomment
+from bktools import diffcomment, manifest_diff
 
 
 @pytest.fixture(autouse=True)
@@ -86,7 +86,7 @@ def test_main_posts_comment_for_pull_request(
             "```diff\n"
             "diff\n"
             "```\n\n"
-            f"manifest-builder version: `{diffcomment.MANIFEST_BUILDER_VERSION}`\n"
+            f"manifest-builder version: `{manifest_diff.MANIFEST_BUILDER_VERSION}`\n"
             "Exit code: `7`",
         )
     ]
@@ -135,7 +135,7 @@ def test_main_dumps_comment_body_without_posting(
         "```diff\n"
         "diff\n"
         "```\n\n"
-        f"manifest-builder version: `{diffcomment.MANIFEST_BUILDER_VERSION}`\n"
+        f"manifest-builder version: `{manifest_diff.MANIFEST_BUILDER_VERSION}`\n"
     )
     assert posted == []
 
@@ -231,7 +231,7 @@ def test_main_posts_comment_for_github_actions_pull_request(
             "```diff\n"
             "diff\n"
             "```\n\n"
-            f"manifest-builder version: `{diffcomment.MANIFEST_BUILDER_VERSION}`",
+            f"manifest-builder version: `{manifest_diff.MANIFEST_BUILDER_VERSION}`",
         )
     ]
 
@@ -267,7 +267,7 @@ def test_main_uploads_full_diff_artifact_when_context_diff_is_omitted(
             0,
             diffcomment.ManifestDiff(
                 stat="berries.yaml | 1 +\n",
-                diff="x" * diffcomment.MAX_COMMENT_CHARS,
+                diff="x" * manifest_diff.MAX_COMMENT_CHARS,
             ),
         ),
     )
@@ -380,9 +380,9 @@ def test_run_manifest_builder_diff_captures_git_diff(
         calls.append(("diff", output))
         return "diff output\n"
 
-    monkeypatch.setattr(diffcomment, "git_add_all", fake_add_all)
-    monkeypatch.setattr(diffcomment, "git_diff_stat", fake_diff_stat)
-    monkeypatch.setattr(diffcomment, "git_diff", fake_diff)
+    monkeypatch.setattr(manifest_diff, "git_add_all", fake_add_all)
+    monkeypatch.setattr(manifest_diff, "git_diff_stat", fake_diff_stat)
+    monkeypatch.setattr(manifest_diff, "git_diff", fake_diff)
 
     assert diffcomment.run_manifest_builder_diff(input_dir) == (
         0,
@@ -419,11 +419,11 @@ def test_run_manifest_builder_diff_includes_added_file_after_move(
     (input_dir / "old.yaml").unlink()
     (input_dir / "new.yaml").write_text("name: original\n")
 
-    _, manifest_diff = diffcomment.run_manifest_builder_diff(input_dir)
+    _, result = diffcomment.run_manifest_builder_diff(input_dir)
 
-    assert "old.yaml => new.yaml" in manifest_diff.stat
-    assert "rename from old.yaml" in manifest_diff.diff
-    assert "rename to new.yaml" in manifest_diff.diff
+    assert "old.yaml => new.yaml" in result.stat
+    assert "rename from old.yaml" in result.diff
+    assert "rename to new.yaml" in result.diff
 
 
 def test_run_manifest_builder_diff_summarizes_repeated_metadata_and_filters_noise(
@@ -505,18 +505,18 @@ def test_run_manifest_builder_diff_summarizes_repeated_metadata_and_filters_nois
         "  - port: 80\n"
     )
 
-    _, manifest_diff = diffcomment.run_manifest_builder_diff(input_dir)
+    _, result = diffcomment.run_manifest_builder_diff(input_dir)
 
     assert (
         "- Label `app.kubernetes.io/version` changed from `v1.8.0` to `v1.8.1` "
         "on 2 manifests."
-    ) in manifest_diff.summary
-    assert "noa.re/deploy-id" in manifest_diff.diff
-    assert "noa.re/deploy-id" not in manifest_diff.summary
-    assert manifest_diff.filtered_diff is not None
-    assert "noa.re/deploy-id" not in manifest_diff.filtered_diff
-    assert "app.kubernetes.io/version" not in manifest_diff.filtered_diff
-    assert "image: example/app:v1.8.1" in manifest_diff.filtered_diff
+    ) in result.summary
+    assert "noa.re/deploy-id" in result.diff
+    assert "noa.re/deploy-id" not in result.summary
+    assert result.filtered_diff is not None
+    assert "noa.re/deploy-id" not in result.filtered_diff
+    assert "app.kubernetes.io/version" not in result.filtered_diff
+    assert "image: example/app:v1.8.1" in result.filtered_diff
 
 
 def test_filter_metadata_hunks_handles_metadata_context_headers() -> None:
@@ -537,7 +537,7 @@ def test_filter_metadata_hunks_handles_metadata_context_headers() -> None:
         "   replicas: 1\n"
     )
 
-    filtered_diff = diffcomment.filter_metadata_hunks(
+    filtered_diff = manifest_diff.filter_metadata_hunks(
         raw_diff,
         {
             ("metadata", "labels", "app.kubernetes.io/version"),
@@ -567,7 +567,7 @@ def test_filter_metadata_hunks_treats_null_annotations_as_absent() -> None:
         "   group: metrics.k8s.io\n"
     )
 
-    filtered_diff = diffcomment.filter_metadata_hunks(
+    filtered_diff = manifest_diff.filter_metadata_hunks(
         raw_diff,
         {
             ("metadata", "labels", "app.kubernetes.io/version"),
@@ -677,7 +677,7 @@ def test_build_comment_body_excludes_build_metadata_and_includes_version(
     assert "file.yaml | 1 +" in comment.body
     assert "````diff\n```diff\n+hello\n```\n````" in comment.body
     assert (
-        f"manifest-builder version: `{diffcomment.MANIFEST_BUILDER_VERSION}`"
+        f"manifest-builder version: `{manifest_diff.MANIFEST_BUILDER_VERSION}`"
         in comment.body
     )
     assert not comment.omitted_context_diff
@@ -692,7 +692,7 @@ def test_build_comment_body_uses_placeholder_for_empty_output() -> None:
         "The generated output is the same before and after this change" in comment.body
     )
     assert (
-        f"manifest-builder version: `{diffcomment.MANIFEST_BUILDER_VERSION}`"
+        f"manifest-builder version: `{manifest_diff.MANIFEST_BUILDER_VERSION}`"
         in comment.body
     )
     assert not comment.omitted_context_diff
@@ -719,7 +719,7 @@ def test_build_comment_body_omits_context_diff_when_too_large() -> None:
         0,
         diffcomment.ManifestDiff(
             stat="file.yaml | 1 +\n",
-            diff="x" * diffcomment.MAX_COMMENT_CHARS,
+            diff="x" * manifest_diff.MAX_COMMENT_CHARS,
         ),
     )
 
@@ -735,7 +735,7 @@ def test_build_comment_body_can_use_github_actions_artifact_wording() -> None:
         0,
         diffcomment.ManifestDiff(
             stat="file.yaml | 1 +\n",
-            diff="x" * diffcomment.MAX_COMMENT_CHARS,
+            diff="x" * manifest_diff.MAX_COMMENT_CHARS,
         ),
         full_diff_reference=diffcomment.full_diff_reference("github"),
     )
