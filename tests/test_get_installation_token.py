@@ -88,7 +88,7 @@ def test_request_installation_token_gets_token(
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
     token = request_installation_token(
-        "https://idcat.noa.re", "nresare/manifests", "oidc-token"
+        "https://idcat.noa.re", "berries-app", "nresare/manifests", "oidc-token"
     )
 
     assert token == "ghs_installationtoken"
@@ -96,7 +96,8 @@ def test_request_installation_token_gets_token(
     request = requests[0]
     assert request.get_method() == "POST"
     assert (
-        request.full_url == "https://idcat.noa.re/installation-token/nresare/manifests"
+        request.full_url
+        == "https://idcat.noa.re/installation-token/berries-app/nresare/manifests"
     )
     assert request.headers["Authorization"] == "Bearer oidc-token"
 
@@ -117,7 +118,7 @@ def test_request_installation_token_raises_on_http_error(
 
     with pytest.raises(Exception, match="installation token request failed"):
         request_installation_token(
-            "https://idcat.noa.re", "nresare/manifests", "oidc-token"
+            "https://idcat.noa.re", "berries-app", "nresare/manifests", "oidc-token"
         )
 
 
@@ -145,6 +146,8 @@ def test_main_prints_installation_token_to_stdout(
         [
             "--endpoint",
             "https://idcat.noa.re/",
+            "--github-app",
+            "nresare-buildsystem",
             "--repo",
             "https://github.com/nresare/manifests.git",
         ],

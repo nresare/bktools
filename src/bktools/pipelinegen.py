@@ -24,6 +24,7 @@ PYTHON_PACKAGE_REGISTRY = "nresare/python"
 DEFAULT_AGENTS = {"speed": "fast"}
 CONTAINER_REGISTRY = "repo.noa.re"
 IDCAT_ENDPOINT = "https://idcat.noa.re"
+GITHUB_APP = "nresare-buildsystem"
 BKTOOLS_INSTALL_COMMAND = (
     'uv pip install bktools --extra-index-url="https://repo.noa.re"'
 )
@@ -342,6 +343,7 @@ def diffcomment_pipeline_yaml(
                             (
                                 "pr_comment_token=$$(uv run get-installation-token "
                                 f"--endpoint {IDCAT_ENDPOINT} "
+                                f"--github-app {GITHUB_APP} "
                                 '--repo "$$BUILDKITE_REPO")'
                             ),
                             (
