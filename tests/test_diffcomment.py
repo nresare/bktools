@@ -19,10 +19,7 @@ def clean_ci_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "GITHUB_EVENT_NAME",
         "GITHUB_EVENT_PATH",
         "GITHUB_REPOSITORY",
-        "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
-        "ACTIONS_ID_TOKEN_REQUEST_URL",
-        "BKTOOLS_GITHUB_PROXY_AUDIENCE",
-        "BKTOOLS_GITHUB_PROXY_BASE_URL",
+        "BKTOOLS_GITHUB_API_BASE_URL",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -57,9 +54,6 @@ def test_main_posts_comment_for_pull_request(
         ),
     )
     monkeypatch.setattr(
-        diffcomment, "request_github_proxy_token", lambda ci_system="buildkite": "token"
-    )
-    monkeypatch.setattr(
         diffcomment,
         "post_issue_comment",
         lambda token, owner, repo, pr_number, body: posted.append(
@@ -69,7 +63,7 @@ def test_main_posts_comment_for_pull_request(
 
     result = CliRunner().invoke(
         diffcomment.main,
-        ["--input", str(input_dir)],
+        ["--input", str(input_dir), "--pr-comment-token", "token"],
     )
 
     assert result.exit_code == 7
@@ -106,9 +100,6 @@ def test_main_dumps_comment_body_without_posting(
             0,
             diffcomment.ManifestDiff(stat="berries.yaml | 1 +\n", diff="diff"),
         ),
-    )
-    monkeypatch.setattr(
-        diffcomment, "request_github_proxy_token", lambda ci_system="buildkite": "token"
     )
     monkeypatch.setattr(
         diffcomment,
@@ -150,8 +141,8 @@ def test_main_generates_input_checkout_from_repo(
     monkeypatch.setattr(
         diffcomment,
         "run_manifest_builder_on_checkout",
-        lambda repo, *, create_commit: (
-            calls.append((repo, create_commit)) or generated_dir
+        lambda repo, *, create_commit, clone_token: (
+            calls.append((repo, create_commit, clone_token)) or generated_dir
         ),
     )
     monkeypatch.setattr(
@@ -173,8 +164,60 @@ def test_main_generates_input_checkout_from_repo(
     )
 
     assert result.exit_code == 0
-    assert calls == [("https://github.com/nresare/manifests.git", False)]
+    assert calls == [("https://github.com/nresare/manifests.git", False, None)]
     assert "output.yaml | 1 +" in result.stdout
+
+
+def test_main_forwards_target_clone_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    generated_dir = tmp_path / "output"
+    generated_dir.mkdir()
+    calls = []
+    monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "42")
+    monkeypatch.setattr(
+        diffcomment,
+        "run_manifest_builder_on_checkout",
+        lambda repo, *, create_commit, clone_token: (
+            calls.append((repo, create_commit, clone_token)) or generated_dir
+        ),
+    )
+    monkeypatch.setattr(
+        diffcomment,
+        "run_manifest_builder_diff",
+        lambda input_dir: (0, diffcomment.ManifestDiff(stat="", diff="")),
+    )
+
+    result = CliRunner().invoke(
+        diffcomment.main,
+        [
+            "--dump",
+            "--target-repo",
+            "https://github.com/nresare/manifests.git",
+            "--target-clone-token",
+            "clone-token",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [("https://github.com/nresare/manifests.git", False, "clone-token")]
+
+
+def test_main_requires_pr_comment_token_to_post(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    input_dir = tmp_path / "output"
+    input_dir.mkdir()
+    monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "42")
+    monkeypatch.setenv("BUILDKITE_REPO", "git@github.com:nresare/berries-config.git")
+
+    result = CliRunner().invoke(
+        diffcomment.main,
+        ["--input", str(input_dir)],
+    )
+
+    assert result.exit_code == 2
+    assert "--pr-comment-token is required" in result.output
 
 
 def test_main_posts_comment_for_github_actions_pull_request(
@@ -198,11 +241,6 @@ def test_main_posts_comment_for_github_actions_pull_request(
     )
     monkeypatch.setattr(
         diffcomment,
-        "request_github_proxy_token",
-        lambda ci_system="buildkite": f"{ci_system}-token",
-    )
-    monkeypatch.setattr(
-        diffcomment,
         "post_issue_comment",
         lambda token, owner, repo, pr_number, body: posted.append(
             (token, owner, repo, pr_number, body)
@@ -215,6 +253,8 @@ def test_main_posts_comment_for_github_actions_pull_request(
             "--ci-system=github",
             "--input",
             str(input_dir),
+            "--pr-comment-token",
+            "github-token",
         ],
     )
 
@@ -272,9 +312,6 @@ def test_main_uploads_full_diff_artifact_when_context_diff_is_omitted(
         ),
     )
     monkeypatch.setattr(
-        diffcomment, "request_github_proxy_token", lambda ci_system="buildkite": "token"
-    )
-    monkeypatch.setattr(
         diffcomment,
         "post_issue_comment",
         lambda token, owner, repo, pr_number, body: posted.append(
@@ -291,7 +328,7 @@ def test_main_uploads_full_diff_artifact_when_context_diff_is_omitted(
 
     result = CliRunner().invoke(
         diffcomment.main,
-        ["--input", str(input_dir)],
+        ["--input", str(input_dir), "--pr-comment-token", "token"],
     )
 
     artifact_path = tmp_path / diffcomment.FULL_DIFF_ARTIFACT
@@ -336,7 +373,7 @@ def test_main_requires_input_or_repo_for_pull_request(
 ) -> None:
     monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "42")
 
-    result = CliRunner().invoke(diffcomment.main)
+    result = CliRunner().invoke(diffcomment.main, ["--pr-comment-token", "token"])
 
     assert result.exit_code == 2
     assert "requires --input or --target-repo" in result.output
@@ -356,6 +393,8 @@ def test_main_rejects_input_and_repo_together(
             str(input_dir),
             "--target-repo",
             "https://github.com/nresare/manifests.git",
+            "--pr-comment-token",
+            "token",
         ],
     )
 
@@ -618,19 +657,14 @@ def test_github_repo_prefers_pull_request_repo(
     assert diffcomment.github_repo() == ("fork", "source")
 
 
-def test_request_github_actions_proxy_token(
+def test_post_issue_comment_uses_github_rest_api(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     requested = []
-    monkeypatch.setenv(
-        "ACTIONS_ID_TOKEN_REQUEST_URL", "https://actions.example/id-token?api=v1"
-    )
-    monkeypatch.setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "request-token")
-    monkeypatch.setenv("BKTOOLS_GITHUB_PROXY_AUDIENCE", "proxy.example")
 
     class FakeResponse:
         def read(self) -> bytes:
-            return b'{"value": "oidc-token"}'
+            return b""
 
     class FakeUrlopen:
         def __init__(self, request: object, timeout: int) -> None:
@@ -647,15 +681,18 @@ def test_request_github_actions_proxy_token(
 
     monkeypatch.setattr(diffcomment.urllib.request, "urlopen", fake_urlopen)
 
-    assert diffcomment.request_github_proxy_token("github") == "oidc-token"
+    diffcomment.post_issue_comment(
+        "pr-comment-token", "nresare", "berries-config", "42", "hello"
+    )
 
     request, timeout = requested[0]
     assert timeout == 30
     assert (
         request.full_url
-        == "https://actions.example/id-token?api=v1&audience=proxy.example"
+        == "https://api.github.com/repos/nresare/berries-config/issues/42/comments"
     )
-    assert request.headers["Authorization"] == "Bearer request-token"
+    assert request.headers["Authorization"] == "Bearer pr-comment-token"
+    assert request.data == b'{"body": "hello"}'
 
 
 def test_build_comment_body_excludes_build_metadata_and_includes_version(

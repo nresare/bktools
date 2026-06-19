@@ -47,7 +47,15 @@ uv run pytest
   from the nearest reachable `vX.Y.Z` git tag.
 - `diffcomment`: generate a manifest diff comment for a pull request. It reads
   Buildkite environment variables by default; pass `--ci-system=github` to read
-  GitHub Actions pull request context and OIDC token environment instead.
+  GitHub Actions pull request context instead. Pass `--pr-comment-token` with a
+  GitHub token to post the comment via the GitHub REST API, and
+  `--target-clone-token` to authenticate the `--target-repo` clone where ambient
+  credentials are unavailable.
+- `get-installation-token`: obtain a GitHub App installation token from an idcat
+  endpoint. It requests a Buildkite OIDC token whose audience is `--endpoint`
+  without the scheme or trailing slash, exchanges it at
+  `--endpoint/installation-token/OWNER/REPO`, and prints the resulting token to
+  stdout.
 - `notify-relcoord`: notify a relcoord endpoint about a published container
   image. The tool takes the endpoint as a positional argument, requests a
   Buildkite OIDC token for that audience, and posts the current

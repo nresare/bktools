@@ -7,7 +7,6 @@ import re
 import subprocess
 import sys
 import urllib.error
-import urllib.parse
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -24,8 +23,7 @@ from bktools.manifest_diff import (
 )
 
 
-GITHUB_PROXY_AUDIENCE = "idcat.noa.re"
-GITHUB_PROXY_BASE_URL = "https://idcat.noa.re/proxy"
+GITHUB_API_BASE_URL = "https://api.github.com"
 GITHUB_API_VERSION = "2026-03-10"
 
 logger = logging.getLogger("diffcomment")
@@ -51,6 +49,17 @@ class CiContext:
     help="Repository to shallow-clone as the manifest output before generation.",
 )
 @click.option(
+    "--target-clone-token",
+    help=(
+        "Token used to authenticate the --target-repo clone. Leave unset to rely on "
+        "ambient credentials (e.g. on a Buildkite agent)."
+    ),
+)
+@click.option(
+    "--pr-comment-token",
+    help="GitHub token used to post the diff comment to the GitHub REST API.",
+)
+@click.option(
     "--dump",
     is_flag=True,
     help="Write the generated GitHub comment body to stdout instead of posting it.",
@@ -63,7 +72,12 @@ class CiContext:
     help="CI system environment to read.",
 )
 def main(
-    input_dir: Path | None, target_repo: str | None, dump: bool, ci_system: CiSystem
+    input_dir: Path | None,
+    target_repo: str | None,
+    target_clone_token: str | None,
+    pr_comment_token: str | None,
+    dump: bool,
+    ci_system: CiSystem,
 ) -> None:
     logging.basicConfig(
         format="%(asctime)s %(levelname)s %(message)s",
@@ -84,7 +98,12 @@ def main(
             )
             return
 
-    input_dir = prepare_manifest_dir(input_dir, target_repo)
+    if not dump and pr_comment_token is None:
+        raise click.UsageError(
+            "--pr-comment-token is required to post the diff comment"
+        )
+
+    input_dir = prepare_manifest_dir(input_dir, target_repo, target_clone_token)
 
     logger.info("running manifest-builder diff for pull request #%s", pr_number)
     returncode, diff = run_manifest_builder_diff(input_dir)
@@ -111,8 +130,7 @@ def main(
         raise click.ClickException(
             f"could not infer GitHub repository from {ci_system} environment"
         )
-    logger.info("requesting GitHub API proxy token for GitHub comment")
-    token = request_github_proxy_token(ci_system)
+    assert pr_comment_token is not None  # guaranteed by the earlier --dump check
 
     logger.info(
         "posting manifest diff comment to %s/%s pull request #%s",
@@ -120,13 +138,17 @@ def main(
         repo_name,
         pr_number,
     )
-    post_issue_comment(token, owner, repo_name, pr_number, comment.body)
+    post_issue_comment(pr_comment_token, owner, repo_name, pr_number, comment.body)
     logger.info("posted manifest diff comment")
 
     raise click.exceptions.Exit(returncode)
 
 
-def prepare_manifest_dir(input_dir: Path | None, target_repo: str | None) -> Path:
+def prepare_manifest_dir(
+    input_dir: Path | None,
+    target_repo: str | None,
+    target_clone_token: str | None = None,
+) -> Path:
     if input_dir is not None and target_repo is not None:
         raise click.UsageError(
             "diffcomment accepts only one of --input or --target-repo"
@@ -134,7 +156,9 @@ def prepare_manifest_dir(input_dir: Path | None, target_repo: str | None) -> Pat
     if input_dir is not None:
         return input_dir
     if target_repo is not None:
-        return run_manifest_builder_on_checkout(target_repo, create_commit=False)
+        return run_manifest_builder_on_checkout(
+            target_repo, create_commit=False, clone_token=target_clone_token
+        )
     raise click.UsageError("diffcomment requires --input or --target-repo")
 
 
@@ -250,51 +274,6 @@ def github_repo() -> tuple[str, str]:
     return match.group(1), match.group(2)
 
 
-def request_github_proxy_token(ci_system: CiSystem = "buildkite") -> str:
-    if ci_system == "buildkite":
-        return request_buildkite_github_proxy_token()
-    if ci_system == "github":
-        return request_github_actions_proxy_token()
-    raise ValueError(f"unsupported CI system: {ci_system}")
-
-
-def request_buildkite_github_proxy_token() -> str:
-    audience = os.environ.get("BKTOOLS_GITHUB_PROXY_AUDIENCE", GITHUB_PROXY_AUDIENCE)
-    return subprocess.check_output(
-        ["buildkite-agent", "oidc", "request-token", "--audience", audience],
-        text=True,
-    ).strip()
-
-
-def request_github_actions_proxy_token() -> str:
-    audience = os.environ.get("BKTOOLS_GITHUB_PROXY_AUDIENCE", GITHUB_PROXY_AUDIENCE)
-    request_url = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL")
-    request_token = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
-    if not request_url or not request_token:
-        raise click.ClickException(
-            "GitHub Actions OIDC token environment is required for --ci-system=github"
-        )
-
-    separator = "&" if "?" in request_url else "?"
-    url = f"{request_url}{separator}{urllib.parse.urlencode({'audience': audience})}"
-    request = urllib.request.Request(
-        url,
-        headers={
-            "Authorization": f"Bearer {request_token}",
-            "Accept": "application/json",
-        },
-    )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        payload = json.loads(response.read())
-
-    value = payload.get("value") if isinstance(payload, dict) else None
-    if not isinstance(value, str) or not value:
-        raise click.ClickException(
-            "GitHub Actions OIDC response did not contain a token"
-        )
-    return value
-
-
 def full_diff_reference(ci_system: CiSystem) -> str:
     if ci_system == "buildkite":
         return f"uploaded as Buildkite artifact `{FULL_DIFF_ARTIFACT}`"
@@ -308,11 +287,8 @@ def full_diff_reference(ci_system: CiSystem) -> str:
 def post_issue_comment(
     token: str, owner: str, repo: str, pr_number: str, body: str
 ) -> None:
-    base_url = os.environ.get("BKTOOLS_GITHUB_PROXY_BASE_URL", GITHUB_PROXY_BASE_URL)
-    url = (
-        f"{base_url}/nresare-buildsystem/repos/{owner}/{repo}"
-        f"/issues/{pr_number}/comments"
-    )
+    base_url = os.environ.get("BKTOOLS_GITHUB_API_BASE_URL", GITHUB_API_BASE_URL)
+    url = f"{base_url}/repos/{owner}/{repo}/issues/{pr_number}/comments"
     request = urllib.request.Request(
         url,
         data=json.dumps({"body": body}).encode(),

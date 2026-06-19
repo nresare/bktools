@@ -169,9 +169,13 @@ def test_diffcomment_pipeline_yaml_posts_manifest_diff_comment() -> None:
     assert '--extra-index-url="https://repo.noa.re"' in pipeline
     assert "--pre" not in pipeline
     assert (
-        "uv run diffcomment --target-repo https://github.com/nresare/manifests.git"
-        in pipeline
-    )
+        "pr_comment_token=$$(uv run get-installation-token "
+        '--endpoint https://idcat.noa.re --repo "$$BUILDKITE_REPO")'
+    ) in pipeline
+    assert (
+        "uv run diffcomment --target-repo https://github.com/nresare/manifests.git "
+        '--pr-comment-token "$$pr_comment_token"'
+    ) in pipeline
     assert "manifest-builder-on-checkout" not in pipeline
     assert "manifest_builder_main" not in pipeline
 
