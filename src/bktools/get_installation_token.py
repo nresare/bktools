@@ -19,6 +19,11 @@ logger = logging.getLogger("get-installation-token")
     help="idcat endpoint to request the installation token from.",
 )
 @click.option(
+    "--github-app",
+    required=True,
+    help="GitHub App that idcat should mint the installation token for.",
+)
+@click.option(
     "--repo",
     required=True,
     help=(
@@ -26,7 +31,7 @@ logger = logging.getLogger("get-installation-token")
         "valid for. The OWNER/REPO is derived from this URL."
     ),
 )
-def main(endpoint: str, repo: str) -> None:
+def main(endpoint: str, github_app: str, repo: str) -> None:
     logging.basicConfig(
         format="%(asctime)s %(levelname)s %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
@@ -42,8 +47,15 @@ def main(endpoint: str, repo: str) -> None:
     logger.info("requesting Buildkite OIDC token for audience %s", audience)
     oidc_token = request_pipeline_oidc_token(audience)
 
-    logger.info("requesting installation token for %s from %s", owner_repo, endpoint)
-    installation_token = request_installation_token(endpoint, owner_repo, oidc_token)
+    logger.info(
+        "requesting installation token for %s via app %s from %s",
+        owner_repo,
+        github_app,
+        endpoint,
+    )
+    installation_token = request_installation_token(
+        endpoint, github_app, owner_repo, oidc_token
+    )
     logger.info("obtained installation token for %s", owner_repo)
 
     click.echo(installation_token)
@@ -73,8 +85,10 @@ def request_pipeline_oidc_token(audience: str) -> str:
     ).strip()
 
 
-def request_installation_token(endpoint: str, owner_repo: str, oidc_token: str) -> str:
-    url = f"{endpoint}/installation-token/{owner_repo}"
+def request_installation_token(
+    endpoint: str, github_app: str, owner_repo: str, oidc_token: str
+) -> str:
+    url = f"{endpoint}/installation-token/{github_app}/{owner_repo}"
     request = urllib.request.Request(
         url,
         method="POST",
