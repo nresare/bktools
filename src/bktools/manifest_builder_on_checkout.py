@@ -8,7 +8,10 @@ import urllib.parse
 from pathlib import Path
 
 import click
-from manifest_builder import generate
+
+# The public ``manifest_builder.generate`` wrapper does not forward ``vars_from``,
+# so use the api-level entry point that does.
+from manifest_builder.api import generate
 
 logger = logging.getLogger("manifest-builder-on-checkout")
 
@@ -43,12 +46,18 @@ def run_manifest_builder_on_checkout(
     *,
     create_commit: bool = True,
     clone_token: str | None = None,
+    vars_from: Path | None = None,
 ) -> Path:
     tmpdir = tempfile.mkdtemp(prefix="bktools-manifest-builder-")
     output_dir = Path(tmpdir) / "output"
     clone_output_repository(repo, output_dir, clone_token=clone_token)
     logger.info("generating manifests from %s into %s", manifest_config_dir, output_dir)
-    generate(manifest_config_dir, output_dir, create_commit=create_commit)
+    generate(
+        manifest_config_dir,
+        output_dir,
+        create_commit=create_commit,
+        vars_from=vars_from,
+    )
     if create_commit:
         push_output_repository(output_dir)
     return output_dir

@@ -56,6 +56,11 @@ class CiContext:
     ),
 )
 @click.option(
+    "--vars-from",
+    type=click.Path(path_type=Path),
+    help="TOML file of extra template variables passed through to manifest-builder.",
+)
+@click.option(
     "--pr-comment-token",
     help="GitHub token used to post the diff comment to the GitHub REST API.",
 )
@@ -75,6 +80,7 @@ def main(
     input_dir: Path | None,
     target_repo: str | None,
     target_clone_token: str | None,
+    vars_from: Path | None,
     pr_comment_token: str | None,
     dump: bool,
     ci_system: CiSystem,
@@ -103,7 +109,9 @@ def main(
             "--pr-comment-token is required to post the diff comment"
         )
 
-    input_dir = prepare_manifest_dir(input_dir, target_repo, target_clone_token)
+    input_dir = prepare_manifest_dir(
+        input_dir, target_repo, target_clone_token, vars_from
+    )
 
     logger.info("running manifest-builder diff for pull request #%s", pr_number)
     returncode, diff = run_manifest_builder_diff(input_dir)
@@ -148,6 +156,7 @@ def prepare_manifest_dir(
     input_dir: Path | None,
     target_repo: str | None,
     target_clone_token: str | None = None,
+    vars_from: Path | None = None,
 ) -> Path:
     if input_dir is not None and target_repo is not None:
         raise click.UsageError(
@@ -157,7 +166,10 @@ def prepare_manifest_dir(
         return input_dir
     if target_repo is not None:
         return run_manifest_builder_on_checkout(
-            target_repo, create_commit=False, clone_token=target_clone_token
+            target_repo,
+            create_commit=False,
+            clone_token=target_clone_token,
+            vars_from=vars_from,
         )
     raise click.UsageError("diffcomment requires --input or --target-repo")
 
