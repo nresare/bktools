@@ -34,19 +34,47 @@ def assert_docker_publish_step(
     pipeline: str, *, depends_on: str, tag: str = "0.1.0-deadbeef"
 ) -> None:
     parsed = yaml.safe_load(pipeline)
-    step = parsed["steps"][1]
+    amd64, arm64, manifest = parsed["steps"][1:4]
 
-    assert step["label"] == ":whale: build docker image"
-    assert step["depends_on"] == depends_on
-    assert step["agents"] == {"arch": "arm64"}
-    assert step["commands"][0] == (
+    for arch, step in (("amd64", amd64), ("arm64", arm64)):
+        assert step["label"] == f":whale: build docker image ({arch})"
+        assert step["key"] == f"docker-build-{arch}"
+        assert step["depends_on"] == depends_on
+        assert_registry_login(step["commands"])
+        assert f"--platform linux/{arch}" in step["commands"][2]
+        assert "push-by-digest=true" in step["commands"][2]
+        assert "name-canonical=true" in step["commands"][2]
+        assert_docker_buildx_publish_command(
+            step["commands"], "repo.noa.re/example-app"
+        )
+        assert step["commands"][3] == (
+            f"buildkite-agent meta-data set digest-{arch} "
+            '"$$(jq -r \'."containerimage.digest"\' buildx-metadata.json)"'
+        )
+
+    assert amd64["agents"] == {"arch": "amd64", "speed": "fast"}
+    assert arm64["agents"] == {"arch": "arm64"}
+
+    assert manifest["label"] == ":whale: push multi-arch docker image"
+    assert manifest["depends_on"] == ["docker-build-amd64", "docker-build-arm64"]
+    assert_registry_login(manifest["commands"])
+    assert manifest["commands"][2] == expected_imagetools_command(tag)
+
+
+def expected_imagetools_command(tag: str) -> str:
+    return (
+        f"docker buildx imagetools create -t repo.noa.re/example-app:{tag} "
+        "repo.noa.re/example-app@$$(buildkite-agent meta-data get digest-amd64) "
+        "repo.noa.re/example-app@$$(buildkite-agent meta-data get digest-arm64)"
+    )
+
+
+def assert_registry_login(commands: list[str]) -> None:
+    assert commands[0] == (
         "token=$$(buildkite-agent oidc request-token --audience repo.noa.re)"
     )
-    assert step["commands"][1] == (
+    assert commands[1] == (
         "echo $$token | docker login --password-stdin -u token repo.noa.re"
-    )
-    assert_docker_buildx_publish_command(
-        step["commands"], f"repo.noa.re/example-app:{tag}"
     )
 
 
@@ -271,10 +299,10 @@ def test_pipeline_yaml_with_relcoord_endpoint_notifies_after_docker_publish() ->
         relcoord_endpoint="relcoord.example.com",
     )
     parsed = yaml.safe_load(pipeline)
-    step = parsed["steps"][1]
+    step = parsed["steps"][3]
 
-    build_command_index = assert_docker_buildx_publish_command(
-        step["commands"], "repo.noa.re/example-app:0.1.0-deadbeef"
+    manifest_command_index = step["commands"].index(
+        expected_imagetools_command("0.1.0-deadbeef")
     )
     assert step["commands"][-3] == "uv venv"
     assert step["commands"][-2] == (
@@ -285,7 +313,7 @@ def test_pipeline_yaml_with_relcoord_endpoint_notifies_after_docker_publish() ->
         "uv run notify-relcoord relcoord.example.com "
         "--repo repo.noa.re/example-app --tag 0.1.0-deadbeef"
     )
-    assert build_command_index < step["commands"].index(step["commands"][-1])
+    assert manifest_command_index < step["commands"].index(step["commands"][-1])
 
 
 def test_read_config_accepts_manifest_builder_repo(tmp_path: Path) -> None:
@@ -396,7 +424,13 @@ def test_main_uses_uv_container_output_and_logs_docker_target(
 
     assert "uv run pytest" in captured.out
     assert_docker_buildx_publish_command(
-        parsed["steps"][1]["commands"], "repo.noa.re/example-app:0.1.0-deadbeef"
+        parsed["steps"][1]["commands"], "repo.noa.re/example-app"
+    )
+    assert_docker_buildx_publish_command(
+        parsed["steps"][2]["commands"], "repo.noa.re/example-app"
+    )
+    assert parsed["steps"][3]["commands"][2] == expected_imagetools_command(
+        "0.1.0-deadbeef"
     )
     assert "building on main branch, uploading to example-app" in captured.err
 

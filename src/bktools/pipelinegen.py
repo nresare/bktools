@@ -22,6 +22,8 @@ VALID_VARIANTS = ("rust", "uv", "manifest-builder", "rust-container")
 VALID_OUTPUTS = ("container",)
 PYTHON_PACKAGE_REGISTRY = "nresare/python"
 DEFAULT_AGENTS = {"speed": "fast"}
+BUILD_ARCHES = ("amd64", "arm64")
+BUILDX_METADATA_FILE = "buildx-metadata.json"
 CONTAINER_REGISTRY = "repo.noa.re"
 IDCAT_ENDPOINT = "https://idcat.noa.re"
 GITHUB_APP = "nresare-buildsystem"
@@ -196,21 +198,54 @@ def apply_default_agents(pipeline: dict[str, object]) -> dict[str, object]:
     return {**pipeline, "steps": normalized_steps}
 
 
-def docker_image_publish_step(
+def registry_login_commands() -> list[str]:
+    return [
+        f"token=$$(buildkite-agent oidc request-token --audience {CONTAINER_REGISTRY})",
+        f"echo $$token | docker login --password-stdin -u token {CONTAINER_REGISTRY}",
+    ]
+
+
+def docker_image_build_step(
+    image_repo: str,
+    depends_on: str,
+    *,
+    arch: str,
+) -> dict[str, object]:
+    return {
+        "label": f":whale: build docker image ({arch})",
+        "key": build_step_key(arch),
+        "depends_on": depends_on,
+        "agents": {"arch": arch},
+        "commands": [
+            *registry_login_commands(),
+            (
+                f"docker buildx build --progress=plain . --platform linux/{arch} "
+                f"--metadata-file {BUILDX_METADATA_FILE} "
+                f"--output type=image,name={image_repo},push-by-digest=true,"
+                "name-canonical=true,push=true,compression=zstd"
+            ),
+            (
+                f"buildkite-agent meta-data set {digest_metadata_key(arch)} "
+                f'"$$(jq -r \'."containerimage.digest"\' {BUILDX_METADATA_FILE})"'
+            ),
+        ],
+    }
+
+
+def docker_manifest_push_step(
     image_repo: str,
     tag: str,
-    depends_on: str,
     *,
     relcoord_endpoint: str | None = None,
 ) -> dict[str, object]:
     image = container_image(image_repo, tag)
+    sources = " ".join(
+        f"{image_repo}@$$(buildkite-agent meta-data get {digest_metadata_key(arch)})"
+        for arch in BUILD_ARCHES
+    )
     commands = [
-        f"token=$$(buildkite-agent oidc request-token --audience {CONTAINER_REGISTRY})",
-        f"echo $$token | docker login --password-stdin -u token {CONTAINER_REGISTRY}",
-        (
-            "docker buildx build --progress=plain . "
-            f"--output type=image,name={image},push=true,compression=zstd"
-        ),
+        *registry_login_commands(),
+        f"docker buildx imagetools create -t {image} {sources}",
     ]
     if relcoord_endpoint is not None:
         commands.extend(
@@ -226,13 +261,37 @@ def docker_image_publish_step(
             ]
         )
 
-    step: dict[str, object] = {
-        "label": ":whale: build docker image",
-        "depends_on": depends_on,
-        "agents": {"arch": "arm64"},
+    return {
+        "label": ":whale: push multi-arch docker image",
+        "key": "docker-manifest",
+        "depends_on": [build_step_key(arch) for arch in BUILD_ARCHES],
         "commands": commands,
     }
-    return step
+
+
+def docker_image_publish_steps(
+    image_repo: str,
+    tag: str,
+    depends_on: str,
+    *,
+    relcoord_endpoint: str | None = None,
+) -> list[dict[str, object]]:
+    steps: list[dict[str, object]] = [
+        docker_image_build_step(image_repo, depends_on, arch=arch)
+        for arch in BUILD_ARCHES
+    ]
+    steps.append(
+        docker_manifest_push_step(image_repo, tag, relcoord_endpoint=relcoord_endpoint)
+    )
+    return steps
+
+
+def build_step_key(arch: str) -> str:
+    return f"docker-build-{arch}"
+
+
+def digest_metadata_key(arch: str) -> str:
+    return f"digest-{arch}"
 
 
 def container_image(image_repo: str, tag: str) -> str:
@@ -269,8 +328,8 @@ def rust_pipeline_yaml(
             raise ValueError("tag is required for container output")
         if image_repo is None:
             raise ValueError("image_repo is required for container output")
-        steps.append(
-            docker_image_publish_step(
+        steps.extend(
+            docker_image_publish_steps(
                 image_repo, tag, "test", relcoord_endpoint=relcoord_endpoint
             )
         )
@@ -314,8 +373,8 @@ def uv_pipeline_yaml(
             raise ValueError("tag is required for container output")
         if image_repo is None:
             raise ValueError("image_repo is required for container output")
-        steps.append(
-            docker_image_publish_step(
+        steps.extend(
+            docker_image_publish_steps(
                 image_repo, tag, "test-and-build", relcoord_endpoint=relcoord_endpoint
             )
         )
