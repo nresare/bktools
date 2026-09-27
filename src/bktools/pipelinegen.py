@@ -18,7 +18,7 @@ from bktools.image_version_hash import docker_image_tag, git_toplevel, package_n
 
 PipelineVariant = str
 PipelineOutput = str | None
-VALID_VARIANTS = ("rust", "uv", "manifest-builder", "rust-container")
+VALID_VARIANTS = ("rust", "uv", "manifest-builder", "relcoord", "rust-container")
 VALID_OUTPUTS = ("container",)
 PYTHON_PACKAGE_REGISTRY = "nresare/python"
 DEFAULT_AGENTS = {"speed": "fast"}
@@ -27,8 +27,8 @@ BUILDX_METADATA_FILE = "buildx-metadata.json"
 CONTAINER_REGISTRY = "repo.noa.re"
 IDCAT_ENDPOINT = "https://idcat.noa.re"
 GITHUB_APP = "nresare-buildsystem"
-BKTOOLS_INSTALL_COMMAND = (
-    'uv pip install bktools --extra-index-url="https://repo.noa.re"'
+NOTIFY_RELCOORD_COMMAND = (
+    "uvx --from bktools --index https://repo.noa.re notify-relcoord"
 )
 
 logger = logging.getLogger("pipelinegen")
@@ -111,6 +111,16 @@ def read_config(config_path: Path) -> PipelineConfig:
     manifest_builder = None
     if variant == "manifest-builder":
         manifest_builder = read_manifest_builder_config(config, config_path)
+    if variant == "relcoord" and relcoord_endpoint is None:
+        raise SystemExit(
+            f"pipelinegen config {config_path} variant 'relcoord' "
+            "requires string key 'relcoord-endpoint'"
+        )
+    if variant == "relcoord" and output is not None:
+        raise SystemExit(
+            f"pipelinegen config {config_path} variant 'relcoord' "
+            "does not support 'output'"
+        )
 
     return PipelineConfig(
         variant=variant,
@@ -250,10 +260,8 @@ def docker_manifest_push_step(
     if relcoord_endpoint is not None:
         commands.extend(
             [
-                "uv venv",
-                BKTOOLS_INSTALL_COMMAND,
                 (
-                    "uv run notify-relcoord "
+                    f"{NOTIFY_RELCOORD_COMMAND} "
                     f"{shlex.quote(relcoord_endpoint)} "
                     f"--repo {shlex.quote(image_repo)} "
                     f"--tag {shlex.quote(tag)}"
@@ -459,6 +467,31 @@ def manifest_builder_pipeline_yaml(
     )
 
 
+def relcoord_pipeline_yaml(
+    endpoint: str,
+    *,
+    should_publish: bool = False,
+    is_pull_request: bool = False,
+) -> str:
+    if not is_pull_request and not should_publish:
+        return EMPTY_PIPELINE_YAML
+
+    mode = "diffcomment" if is_pull_request else "change"
+    return render_pipeline_yaml(
+        {
+            "steps": [
+                {
+                    "label": ":pipeline: Request relcoord system " + mode,
+                    "command": (
+                        f"{NOTIFY_RELCOORD_COMMAND} {shlex.quote(endpoint)} --system"
+                        + (" --diffcomment" if is_pull_request else "")
+                    ),
+                }
+            ]
+        }
+    )
+
+
 def pipeline_yaml(
     tag: str | None = None,
     *,
@@ -501,6 +534,15 @@ def pipeline_yaml(
             manifest_builder.repo,
             tag,
             output=output,
+            should_publish=should_publish,
+            is_pull_request=is_pull_request,
+        )
+
+    if variant == "relcoord":
+        if relcoord_endpoint is None:
+            raise ValueError("relcoord-endpoint is required for relcoord variant")
+        return relcoord_pipeline_yaml(
+            relcoord_endpoint,
             should_publish=should_publish,
             is_pull_request=is_pull_request,
         )
@@ -579,7 +621,7 @@ def main() -> None:
         upload_target = repo_suffix
 
     branch = os.getenv("BUILDKITE_BRANCH", "")
-    if config.variant != "manifest-builder":
+    if config.variant not in ("manifest-builder", "relcoord"):
         if should_publish:
             logger.info("building on main branch, uploading to %s", upload_target)
         elif branch:

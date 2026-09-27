@@ -34,12 +34,21 @@ uv run pytest
     variant = "manifest-builder"
     repo = "https://github.com/example/manifests.git"
     ```
+  - `variant = "relcoord"`: request manifest generation through relcoord in
+    system mode. Pull request builds call `/v1/diffcomment`; main-branch builds
+    call `/v1/change`. Other branches add no steps. The relcoord token's role
+    must allow system requests.
+
+    ```toml
+    variant = "relcoord"
+    relcoord-endpoint = "relcoord.example.com"
+    ```
   - `output = "container"`: add a main-branch Docker publish step using
     OIDC registry login and `docker buildx build` with zstd-compressed image
     output.
   - `relcoord-endpoint = "relcoord.example.com"`: after a container image is
     built and pushed, call
-    `uv run notify-relcoord relcoord.example.com --repo ... --tag ...`.
+    `uvx --from bktools --index https://repo.noa.re notify-relcoord relcoord.example.com --repo ... --tag ...`.
   - `variant = "rust-container"` is deprecated. Use `variant = "rust"` with
     `output = "container"` instead.
 - `bktools-image-version-hash`: hash a Docker build context and optionally emit a
@@ -62,3 +71,6 @@ uv run pytest
   `BUILDKITE_COMMIT`, `BUILDKITE_REPO`, tag, and OCI image repository such as
   `repo.noa.re/idmouse` to `/v1/change` as `commit`, `config_repo`, `tag`, and
   `image_repo`.
+- `notify-relcoord --system`: send the current Buildkite repository and commit
+  to relcoord with `system = true`. Add `--diffcomment` to comment on the current
+  pull request; otherwise relcoord generates and pushes manifests.

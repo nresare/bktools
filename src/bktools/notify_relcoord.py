@@ -7,6 +7,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import click
@@ -25,9 +26,17 @@ class RelcoordChange:
 
 @click.command()
 @click.argument("endpoint")
-@click.option("--tag", required=True, help="Container image tag that was published.")
-@click.option("--repo", required=True, help="Container image repository.")
-def main(endpoint: str, tag: str, repo: str) -> None:
+@click.option("--tag", help="Container image tag that was published.")
+@click.option("--repo", help="Container image repository.")
+@click.option(
+    "--system", is_flag=True, help="Generate system manifests through relcoord."
+)
+@click.option(
+    "--diffcomment", is_flag=True, help="Comment on the current pull request."
+)
+def main(
+    endpoint: str, tag: str | None, repo: str | None, system: bool, diffcomment: bool
+) -> None:
     logging.basicConfig(
         format="%(asctime)s %(levelname)s %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
@@ -37,6 +46,21 @@ def main(endpoint: str, tag: str, repo: str) -> None:
     )
 
     endpoint = normalize_endpoint(endpoint)
+    if diffcomment and not system:
+        raise click.UsageError("--diffcomment requires --system")
+    if system:
+        if tag is not None or repo is not None:
+            raise click.UsageError("--tag and --repo cannot be combined with --system")
+        mode = "diffcomment" if diffcomment else "change"
+        payload = build_system_request(mode)
+        logger.info("requesting relcoord token for %s", endpoint)
+        token = request_relcoord_token(endpoint)
+        post_request(endpoint, mode, token, payload)
+        logger.info("relcoord system %s completed", mode)
+        return
+
+    if tag is None or repo is None:
+        raise click.UsageError("--tag and --repo are required unless --system is set")
     logger.info("requesting relcoord token for %s", endpoint)
     token = request_relcoord_token(endpoint)
 
@@ -44,6 +68,29 @@ def main(endpoint: str, tag: str, repo: str) -> None:
     logger.info("notifying relcoord about %s", change.container_image)
     post_change(endpoint, token, change)
     logger.info("notified relcoord")
+
+
+def build_system_request(mode: str) -> dict[str, str | int | bool]:
+    repo = os.environ.get("BUILDKITE_REPO", "").strip()
+    commit = os.environ.get("BUILDKITE_COMMIT", "").strip()
+    if not repo:
+        raise click.ClickException("BUILDKITE_REPO is required")
+    if not commit:
+        raise click.ClickException("BUILDKITE_COMMIT is required")
+
+    payload: dict[str, str | int | bool] = {
+        "config_repo": repo,
+        "commit": commit,
+        "system": True,
+    }
+    if mode == "diffcomment":
+        pull_request = os.environ.get("BUILDKITE_PULL_REQUEST", "")
+        if not pull_request.isdecimal() or int(pull_request) <= 0:
+            raise click.ClickException(
+                "BUILDKITE_PULL_REQUEST must be a positive integer"
+            )
+        payload["pull_request"] = int(pull_request)
+    return payload
 
 
 def normalize_endpoint(endpoint: str) -> str:
@@ -87,13 +134,19 @@ def normalize_container_image_repo(container_image_repo: str) -> str:
 
 
 def post_change(endpoint: str, token: str, change: RelcoordChange) -> None:
-    url = f"https://{endpoint}/v1/change"
     payload = {
         "commit": change.commit,
         "config_repo": change.repo_url,
         "image_repo": change.container_image_repo,
         "tag": change.tag,
     }
+    post_request(endpoint, "change", token, payload)
+
+
+def post_request(
+    endpoint: str, mode: str, token: str, payload: Mapping[str, str | int | bool]
+) -> None:
+    url = f"https://{endpoint}/v1/{mode}"
     body = json.dumps(payload).encode()
     request = urllib.request.Request(
         url,
