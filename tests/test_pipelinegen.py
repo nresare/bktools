@@ -14,6 +14,7 @@ from bktools.pipelinegen import (
     pipeline_yaml,
     read_config,
     read_variant,
+    relcoord_pipeline_yaml,
     upload_pipeline_artifact,
     upload_pipeline,
     uv_pipeline_yaml,
@@ -262,6 +263,44 @@ def test_pipeline_yaml_requires_manifest_builder_config() -> None:
         pipeline_yaml(variant="manifest-builder")
 
 
+def test_relcoord_variant_uses_system_change_on_main() -> None:
+    pipeline = pipeline_yaml(
+        variant="relcoord",
+        relcoord_endpoint="relcoord.example.com",
+        should_publish=True,
+    )
+
+    assert_fast_agent_step(pipeline)
+    assert yaml.safe_load(pipeline)["steps"][0]["command"] == (
+        "uvx --from bktools --index https://repo.noa.re notify-relcoord "
+        "relcoord.example.com --system"
+    )
+    assert "uv venv" not in pipeline
+
+
+def test_relcoord_variant_uses_system_diffcomment_for_pull_request() -> None:
+    pipeline = relcoord_pipeline_yaml(
+        "relcoord.example.com", is_pull_request=True, should_publish=True
+    )
+
+    assert yaml.safe_load(pipeline)["steps"][0]["command"] == (
+        "uvx --from bktools --index https://repo.noa.re notify-relcoord "
+        "relcoord.example.com --system --diffcomment"
+    )
+
+
+def test_relcoord_variant_skips_other_branches() -> None:
+    assert (
+        pipeline_yaml(variant="relcoord", relcoord_endpoint="relcoord.example.com")
+        == "steps: []\n"
+    )
+
+
+def test_relcoord_variant_requires_endpoint() -> None:
+    with pytest.raises(ValueError, match="relcoord-endpoint"):
+        pipeline_yaml(variant="relcoord")
+
+
 def test_pipeline_yaml_requires_tag_for_container_output() -> None:
     with pytest.raises(ValueError, match="container output"):
         pipeline_yaml(variant="uv", output="container", should_publish=True)
@@ -289,6 +328,37 @@ def test_read_config_loads_relcoord_endpoint(tmp_path: Path) -> None:
     )
 
 
+def test_read_config_accepts_relcoord_variant(tmp_path: Path) -> None:
+    config_path = tmp_path / "pipelinegen.toml"
+    config_path.write_text(
+        'variant = "relcoord"\nrelcoord-endpoint = "relcoord.example.com"\n'
+    )
+
+    assert read_config(config_path) == PipelineConfig(
+        variant="relcoord", relcoord_endpoint="relcoord.example.com"
+    )
+
+
+def test_read_config_requires_relcoord_endpoint(tmp_path: Path) -> None:
+    config_path = tmp_path / "pipelinegen.toml"
+    config_path.write_text('variant = "relcoord"\n')
+
+    with pytest.raises(SystemExit, match="relcoord-endpoint"):
+        read_config(config_path)
+
+
+def test_read_config_rejects_output_for_relcoord(tmp_path: Path) -> None:
+    config_path = tmp_path / "pipelinegen.toml"
+    config_path.write_text(
+        'variant = "relcoord"\n'
+        'relcoord-endpoint = "relcoord.example.com"\n'
+        'output = "container"\n'
+    )
+
+    with pytest.raises(SystemExit, match="does not support 'output'"):
+        read_config(config_path)
+
+
 def test_pipeline_yaml_with_relcoord_endpoint_notifies_after_docker_publish() -> None:
     pipeline = pipeline_yaml(
         "0.1.0-deadbeef",
@@ -304,15 +374,12 @@ def test_pipeline_yaml_with_relcoord_endpoint_notifies_after_docker_publish() ->
     manifest_command_index = step["commands"].index(
         expected_imagetools_command("0.1.0-deadbeef")
     )
-    assert step["commands"][-3] == "uv venv"
-    assert step["commands"][-2] == (
-        'uv pip install bktools --extra-index-url="https://repo.noa.re"'
-    )
-    assert "--pre" not in step["commands"][-2]
     assert step["commands"][-1] == (
-        "uv run notify-relcoord relcoord.example.com "
+        "uvx --from bktools --index https://repo.noa.re notify-relcoord "
+        "relcoord.example.com "
         "--repo repo.noa.re/example-app --tag 0.1.0-deadbeef"
     )
+    assert len(step["commands"]) == 4
     assert manifest_command_index < step["commands"].index(step["commands"][-1])
 
 
