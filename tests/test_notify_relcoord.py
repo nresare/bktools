@@ -334,6 +334,37 @@ def test_system_diffcomment_requires_pull_request(
     assert "BUILDKITE_PULL_REQUEST must be a positive integer" in result.output
 
 
+def test_system_diffcomment_accepts_explicit_pull_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BUILDKITE_REPO", "https://github.com/acme/system.git")
+    monkeypatch.setenv("BUILDKITE_COMMIT", "deadbeef")
+    monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "false")
+    monkeypatch.setattr(
+        "bktools.notify_relcoord.request_relcoord_token", lambda endpoint: "token"
+    )
+    posted: list[dict[str, str | int | bool]] = []
+    monkeypatch.setattr(
+        "bktools.notify_relcoord.post_request",
+        lambda endpoint, mode, token, payload: posted.append(payload),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["relcoord.example.com", "--system", "--diffcomment", "--pull-request", "42"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert posted == [
+        {
+            "config_repo": "https://github.com/acme/system.git",
+            "commit": "deadbeef",
+            "system": True,
+            "pull_request": 42,
+        }
+    ]
+
+
 def test_system_request_reports_relcoord_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

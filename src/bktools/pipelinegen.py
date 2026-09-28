@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import re
@@ -8,12 +9,22 @@ import shlex
 import subprocess
 import sys
 import tomllib
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import quote
 
 import yaml
 
+from bktools.get_installation_token import (
+    endpoint_audience,
+    normalize_endpoint,
+    parse_owner_repo,
+    request_installation_token,
+    request_pipeline_oidc_token,
+)
 from bktools.image_version_hash import docker_image_tag, git_toplevel, package_name
 
 PipelineVariant = str
@@ -27,6 +38,7 @@ BUILDX_METADATA_FILE = "buildx-metadata.json"
 CONTAINER_REGISTRY = "repo.noa.re"
 IDCAT_ENDPOINT = "https://idcat.noa.re"
 GITHUB_APP = "nresare-buildsystem"
+GITHUB_API_VERSION = "2026-03-10"
 NOTIFY_RELCOORD_COMMAND = (
     "uvx --from bktools --index https://repo.noa.re notify-relcoord"
 )
@@ -472,6 +484,7 @@ def relcoord_pipeline_yaml(
     *,
     should_publish: bool = False,
     is_pull_request: bool = False,
+    pull_request_number: int | None = None,
 ) -> str:
     if not is_pull_request and not should_publish:
         return EMPTY_PIPELINE_YAML
@@ -485,6 +498,11 @@ def relcoord_pipeline_yaml(
                     "command": (
                         f"{NOTIFY_RELCOORD_COMMAND} {shlex.quote(endpoint)} --system"
                         + (" --diffcomment" if is_pull_request else "")
+                        + (
+                            f" --pull-request {pull_request_number}"
+                            if is_pull_request and pull_request_number is not None
+                            else ""
+                        )
                     ),
                 }
             ]
@@ -502,6 +520,7 @@ def pipeline_yaml(
     manifest_builder: ManifestBuilderConfig | None = None,
     relcoord_endpoint: str | None = None,
     is_pull_request: bool = False,
+    pull_request_number: int | None = None,
 ) -> str:
     if variant == "rust-container":
         variant = "rust"
@@ -545,6 +564,7 @@ def pipeline_yaml(
             relcoord_endpoint,
             should_publish=should_publish,
             is_pull_request=is_pull_request,
+            pull_request_number=pull_request_number,
         )
 
     raise ValueError(f"unknown pipeline variant: {variant}")
@@ -552,6 +572,64 @@ def pipeline_yaml(
 
 def is_pull_request_build() -> bool:
     return os.getenv("BUILDKITE_PULL_REQUEST") not in (None, "", "false")
+
+
+def buildkite_pull_request_number() -> int | None:
+    value = os.getenv("BUILDKITE_PULL_REQUEST", "")
+    if value.isdecimal() and int(value) > 0:
+        return int(value)
+    return None
+
+
+def find_pull_request_for_commit(repo_url: str, commit: str, branch: str) -> int | None:
+    owner_repo = parse_owner_repo(repo_url)
+    idcat_endpoint = normalize_endpoint(IDCAT_ENDPOINT)
+    oidc_token = request_pipeline_oidc_token(endpoint_audience(idcat_endpoint))
+    github_token = request_installation_token(
+        idcat_endpoint, GITHUB_APP, owner_repo, oidc_token
+    )
+    url = (
+        f"https://api.github.com/repos/{owner_repo}/commits/"
+        f"{quote(commit, safe='')}/pulls?per_page=100"
+    )
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {github_token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": GITHUB_API_VERSION,
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            pull_requests = json.load(response)
+    except urllib.error.HTTPError as error:
+        logger.error(
+            "GitHub PR lookup failed for %s at %s: HTTP %s: %s",
+            owner_repo,
+            commit,
+            error.code,
+            error.read().decode("utf-8", errors="replace"),
+        )
+        raise SystemExit("GitHub PR lookup failed") from None
+    except urllib.error.URLError as error:
+        raise SystemExit(f"GitHub PR lookup failed: {error.reason}") from None
+
+    if not isinstance(pull_requests, list):
+        raise SystemExit("GitHub PR lookup returned an unexpected response")
+    matches = [
+        item["number"]
+        for item in pull_requests
+        if isinstance(item, dict)
+        and item.get("state") == "open"
+        and isinstance(item.get("number"), int)
+        and isinstance(item.get("head"), dict)
+        and item["head"].get("sha") == commit
+        and item["head"].get("ref") == branch
+    ]
+    if len(matches) > 1:
+        raise SystemExit(f"multiple open pull requests match {owner_repo} at {commit}")
+    return matches[0] if matches else None
 
 
 PIPELINE_ARTIFACT = "pipeline.yaml"
@@ -629,6 +707,26 @@ def main() -> None:
         else:
             logger.info("not building on main branch, not uploading")
 
+    pull_request_number = buildkite_pull_request_number()
+    if (
+        config.variant == "relcoord"
+        and pull_request_number is None
+        and not should_publish
+        and branch
+        and os.getenv("BUILDKITE_REPO")
+        and os.getenv("BUILDKITE_COMMIT")
+    ):
+        pull_request_number = find_pull_request_for_commit(
+            os.environ["BUILDKITE_REPO"], os.environ["BUILDKITE_COMMIT"], branch
+        )
+        if pull_request_number is not None:
+            logger.info(
+                "found pull request #%s for branch %s at %s",
+                pull_request_number,
+                branch,
+                os.environ["BUILDKITE_COMMIT"],
+            )
+
     yaml = pipeline_yaml(
         tag,
         image_repo=image_repo,
@@ -637,7 +735,12 @@ def main() -> None:
         should_publish=should_publish,
         manifest_builder=config.manifest_builder,
         relcoord_endpoint=config.relcoord_endpoint,
-        is_pull_request=is_pull_request_build(),
+        is_pull_request=(
+            pull_request_number is not None
+            if config.variant == "relcoord"
+            else is_pull_request_build()
+        ),
+        pull_request_number=pull_request_number,
     )
     if args.dump:
         sys.stdout.write(yaml)

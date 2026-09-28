@@ -36,8 +36,11 @@ uv run pytest
     ```
   - `variant = "relcoord"`: request manifest generation through relcoord in
     system mode. Pull request builds call `/v1/diffcomment`; main-branch builds
-    call `/v1/change`. Other branches add no steps. The relcoord token's role
-    must allow system requests.
+    call `/v1/change`. For branch push events that Buildkite does not mark as
+    pull requests, `pipelinegen` looks up an open pull request for the branch's
+    current commit through GitHub. Branches without a matching pull request add
+    no steps. The configured GitHub App needs pull request read access for this
+    lookup, and the relcoord token's role must allow system requests.
 
     ```toml
     variant = "relcoord"

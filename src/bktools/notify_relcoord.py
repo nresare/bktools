@@ -34,8 +34,18 @@ class RelcoordChange:
 @click.option(
     "--diffcomment", is_flag=True, help="Comment on the current pull request."
 )
+@click.option(
+    "--pull-request",
+    type=click.IntRange(min=1),
+    help="Pull request number for --diffcomment, overriding Buildkite metadata.",
+)
 def main(
-    endpoint: str, tag: str | None, repo: str | None, system: bool, diffcomment: bool
+    endpoint: str,
+    tag: str | None,
+    repo: str | None,
+    system: bool,
+    diffcomment: bool,
+    pull_request: int | None,
 ) -> None:
     logging.basicConfig(
         format="%(asctime)s %(levelname)s %(message)s",
@@ -48,11 +58,13 @@ def main(
     endpoint = normalize_endpoint(endpoint)
     if diffcomment and not system:
         raise click.UsageError("--diffcomment requires --system")
+    if pull_request is not None and not diffcomment:
+        raise click.UsageError("--pull-request requires --diffcomment")
     if system:
         if tag is not None or repo is not None:
             raise click.UsageError("--tag and --repo cannot be combined with --system")
         mode = "diffcomment" if diffcomment else "change"
-        payload = build_system_request(mode)
+        payload = build_system_request(mode, pull_request=pull_request)
         logger.info("requesting relcoord token for %s", endpoint)
         token = request_relcoord_token(endpoint)
         post_request(endpoint, mode, token, payload)
@@ -70,7 +82,9 @@ def main(
     logger.info("notified relcoord")
 
 
-def build_system_request(mode: str) -> dict[str, str | int | bool]:
+def build_system_request(
+    mode: str, *, pull_request: int | None = None
+) -> dict[str, str | int | bool]:
     repo = os.environ.get("BUILDKITE_REPO", "").strip()
     commit = os.environ.get("BUILDKITE_COMMIT", "").strip()
     if not repo:
@@ -84,12 +98,14 @@ def build_system_request(mode: str) -> dict[str, str | int | bool]:
         "system": True,
     }
     if mode == "diffcomment":
-        pull_request = os.environ.get("BUILDKITE_PULL_REQUEST", "")
-        if not pull_request.isdecimal() or int(pull_request) <= 0:
-            raise click.ClickException(
-                "BUILDKITE_PULL_REQUEST must be a positive integer"
-            )
-        payload["pull_request"] = int(pull_request)
+        if pull_request is None:
+            pull_request_value = os.environ.get("BUILDKITE_PULL_REQUEST", "")
+            if not pull_request_value.isdecimal() or int(pull_request_value) <= 0:
+                raise click.ClickException(
+                    "BUILDKITE_PULL_REQUEST must be a positive integer"
+                )
+            pull_request = int(pull_request_value)
+        payload["pull_request"] = pull_request
     return payload
 
 

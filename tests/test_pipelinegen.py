@@ -1,5 +1,7 @@
+import json
 import re
 import subprocess
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -9,6 +11,7 @@ from bktools.pipelinegen import (
     ManifestBuilderConfig,
     PipelineConfig,
     diffcomment_pipeline_yaml,
+    find_pull_request_for_commit,
     main,
     manifest_builder_pipeline_yaml,
     pipeline_yaml,
@@ -280,13 +283,150 @@ def test_relcoord_variant_uses_system_change_on_main() -> None:
 
 def test_relcoord_variant_uses_system_diffcomment_for_pull_request() -> None:
     pipeline = relcoord_pipeline_yaml(
-        "relcoord.example.com", is_pull_request=True, should_publish=True
+        "relcoord.example.com",
+        is_pull_request=True,
+        should_publish=True,
+        pull_request_number=42,
     )
 
     assert yaml.safe_load(pipeline)["steps"][0]["command"] == (
         "uvx --from bktools --index https://repo.noa.re notify-relcoord "
-        "relcoord.example.com --system --diffcomment"
+        "relcoord.example.com --system --diffcomment --pull-request 42"
     )
+
+
+def test_find_pull_request_for_commit_matches_open_branch_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "bktools.pipelinegen.request_pipeline_oidc_token", lambda audience: "oidc-token"
+    )
+    token_requests: list[tuple[str, str, str, str]] = []
+
+    def installation_token(endpoint: str, app: str, owner_repo: str, token: str) -> str:
+        token_requests.append((endpoint, app, owner_repo, token))
+        return "github-token"
+
+    monkeypatch.setattr(
+        "bktools.pipelinegen.request_installation_token", installation_token
+    )
+    requests: list[tuple[urllib.request.Request, int]] = []
+
+    class Response:
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+        def read(self) -> bytes:
+            return json.dumps(
+                [
+                    {
+                        "number": 10,
+                        "state": "closed",
+                        "head": {"sha": "deadbeef", "ref": "feature"},
+                    },
+                    {
+                        "number": 11,
+                        "state": "open",
+                        "head": {"sha": "other", "ref": "feature"},
+                    },
+                    {
+                        "number": 42,
+                        "state": "open",
+                        "head": {"sha": "deadbeef", "ref": "feature"},
+                    },
+                ]
+            ).encode()
+
+    def urlopen(request: urllib.request.Request, timeout: int) -> Response:
+        requests.append((request, timeout))
+        return Response()
+
+    monkeypatch.setattr("bktools.pipelinegen.urllib.request.urlopen", urlopen)
+
+    assert (
+        find_pull_request_for_commit(
+            "https://github.com/acme/system.git", "deadbeef", "feature"
+        )
+        == 42
+    )
+    assert token_requests == [
+        ("https://idcat.noa.re", "nresare-buildsystem", "acme/system", "oidc-token")
+    ]
+    request, timeout = requests[0]
+    assert request.full_url == (
+        "https://api.github.com/repos/acme/system/commits/deadbeef/pulls?per_page=100"
+    )
+    assert request.get_header("Authorization") == "Bearer github-token"
+    assert timeout == 30
+
+
+def test_main_finds_pr_for_push_event_and_generates_relcoord_diffcomment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_dir = tmp_path / ".buildkite"
+    config_dir.mkdir()
+    (config_dir / "pipelinegen.toml").write_text(
+        'variant = "relcoord"\nrelcoord-endpoint = "relcoord.example.com"\n'
+    )
+    monkeypatch.setattr(
+        "sys.argv", ["pipelinegen", "--dump", "--repo-root", str(tmp_path)]
+    )
+    monkeypatch.setenv("BUILDKITE_BRANCH", "renovate/surrealdb-surrealdb-3.x")
+    monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "false")
+    monkeypatch.setenv("BUILDKITE_GITHUB_EVENT", "push")
+    monkeypatch.setenv("BUILDKITE_REPO", "https://github.com/nresare/system.git")
+    monkeypatch.setenv("BUILDKITE_COMMIT", "71f7aca008b0fc98261ce20478b58cf521564269")
+    lookups: list[tuple[str, str, str]] = []
+
+    def find_pr(repo: str, commit: str, branch: str) -> int:
+        lookups.append((repo, commit, branch))
+        return 42
+
+    monkeypatch.setattr("bktools.pipelinegen.find_pull_request_for_commit", find_pr)
+
+    main()
+
+    captured = capsys.readouterr()
+    command = yaml.safe_load(captured.out)["steps"][0]["command"]
+    assert command == (
+        "uvx --from bktools --index https://repo.noa.re notify-relcoord "
+        "relcoord.example.com --system --diffcomment --pull-request 42"
+    )
+    assert lookups == [
+        (
+            "https://github.com/nresare/system.git",
+            "71f7aca008b0fc98261ce20478b58cf521564269",
+            "renovate/surrealdb-surrealdb-3.x",
+        )
+    ]
+
+
+def test_main_skips_relcoord_when_push_has_no_open_pull_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_dir = tmp_path / ".buildkite"
+    config_dir.mkdir()
+    (config_dir / "pipelinegen.toml").write_text(
+        'variant = "relcoord"\nrelcoord-endpoint = "relcoord.example.com"\n'
+    )
+    monkeypatch.setattr(
+        "sys.argv", ["pipelinegen", "--dump", "--repo-root", str(tmp_path)]
+    )
+    monkeypatch.setenv("BUILDKITE_BRANCH", "feature")
+    monkeypatch.setenv("BUILDKITE_PULL_REQUEST", "false")
+    monkeypatch.setenv("BUILDKITE_REPO", "https://github.com/nresare/system.git")
+    monkeypatch.setenv("BUILDKITE_COMMIT", "deadbeef")
+    monkeypatch.setattr(
+        "bktools.pipelinegen.find_pull_request_for_commit",
+        lambda repo, commit, branch: None,
+    )
+
+    main()
+
+    assert capsys.readouterr().out == "steps: []\n"
 
 
 def test_relcoord_variant_skips_other_branches() -> None:
