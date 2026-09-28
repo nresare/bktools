@@ -15,6 +15,7 @@ from bktools.notify_relcoord import (
     normalize_container_image_repo,
     normalize_endpoint,
     post_change,
+    print_event_stream,
     request_relcoord_token,
 )
 
@@ -93,6 +94,8 @@ def test_post_change_posts_json_to_relcoord(
     requests: list[urllib.request.Request] = []
 
     class FakeResponse:
+        headers: dict[str, str] = {}
+
         def __enter__(self) -> "FakeResponse":
             return self
 
@@ -116,6 +119,7 @@ def test_post_change_posts_json_to_relcoord(
     assert request.headers == {
         "Authorization": "Bearer token",
         "Content-type": "application/json",
+        "Accept": "text/event-stream",
     }
     assert isinstance(request.data, bytes)
     assert json.loads(request.data) == {
@@ -124,6 +128,45 @@ def test_post_change_posts_json_to_relcoord(
         "image_repo": "repo.noa.re/example-app",
         "tag": "0.1.0-deadbeef",
     }
+
+
+def test_event_stream_prints_each_result_as_it_arrives(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def lines():
+        yield b": keep-alive\n"
+        yield b"\n"
+        yield b"event: accepted\r\n"
+        yield b'data: {"commit":"deadbeef"}\r\n'
+        yield b"\r\n"
+        yield b"event: progress\n"
+        yield b'data: {"phase":"generate",\n'
+        yield b'data: "message":"generated files"}\n'
+        yield b"\n"
+        assert capsys.readouterr().out == (
+            'accepted: {"commit":"deadbeef"}\n'
+            'progress: {"phase":"generate",\n"message":"generated files"}\n'
+        )
+        yield b"event: complete\n"
+        yield b'data: {"processed":true}\n'
+        yield b"\n"
+
+    print_event_stream(lines())
+    assert capsys.readouterr().out == 'complete: {"processed":true}\n'
+
+
+def test_event_stream_error_fails_request(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(ClickException, match="relcoord request failed"):
+        print_event_stream(
+            [
+                b"event: error\n",
+                b'data: {"status":502,"error":"git_transport_failed","message":"clone failed"}\n',
+                b"\n",
+            ]
+        )
+    assert '"message":"clone failed"' in capsys.readouterr().out
 
 
 def test_post_change_reports_relcoord_error_response(
@@ -289,14 +332,21 @@ def test_main_sends_system_request(
     requests: list[urllib.request.Request] = []
 
     class FakeResponse:
+        headers = {"Content-Type": "text/event-stream; charset=utf-8"}
+
         def __enter__(self) -> "FakeResponse":
             return self
 
         def __exit__(self, *args: object) -> None:
             pass
 
-        def read(self) -> bytes:
-            return b"{}"
+        def __iter__(self):
+            yield b"event: accepted\n"
+            yield b'data: {"commit":"deadbeef"}\n'
+            yield b"\n"
+            yield b"event: complete\n"
+            yield b'data: {"processed":true}\n'
+            yield b"\n"
 
     def fake_urlopen(request: urllib.request.Request) -> FakeResponse:
         requests.append(request)
@@ -317,6 +367,8 @@ def test_main_sends_system_request(
         "system": True,
         **({"pull_request": pull_request} if pull_request is not None else {}),
     }
+    assert 'accepted: {"commit":"deadbeef"}' in result.output
+    assert 'complete: {"processed":true}' in result.output
 
 
 def test_system_diffcomment_requires_pull_request(

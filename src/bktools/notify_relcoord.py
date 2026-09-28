@@ -7,7 +7,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 import click
@@ -155,11 +155,21 @@ def post_request(
         headers={
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
+            "Accept": "text/event-stream",
         },
     )
     try:
         with urllib.request.urlopen(request) as response:
-            response.read()
+            content_type = response.headers.get("Content-Type", "")
+            if (
+                content_type.split(";", maxsplit=1)[0].strip().lower()
+                == "text/event-stream"
+            ):
+                print_event_stream(response)
+            else:
+                body = response.read().decode("utf-8", errors="replace")
+                if body:
+                    click.echo(body)
     except urllib.error.HTTPError as error:
         response_body = error.read().decode("utf-8", errors="replace")
         response_message = relcoord_error_message(response_body)
@@ -172,6 +182,32 @@ def post_request(
         )
         logger.error("The following data was sent: %s", serialized_payload)
         raise click.ClickException("relcoord request failed") from None
+
+
+def print_event_stream(lines: Iterable[bytes]) -> None:
+    event: str | None = None
+    data: list[str] = []
+    finished = False
+
+    for raw_line in lines:
+        line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+        if not line:
+            if event is not None and data:
+                payload = "\n".join(data)
+                click.echo(f"{event}: {payload}")
+                if event == "error":
+                    raise click.ClickException("relcoord request failed")
+                if event == "complete":
+                    finished = True
+            event = None
+            data = []
+        elif line.startswith("event:"):
+            event = line.removeprefix("event:").lstrip()
+        elif line.startswith("data:"):
+            data.append(line.removeprefix("data:").lstrip())
+
+    if not finished:
+        raise click.ClickException("relcoord response ended before completion")
 
 
 def relcoord_error_message(response_body: str) -> str:
