@@ -1,5 +1,9 @@
+import base64
 import re
 import subprocess
+import urllib.error
+import urllib.request
+from email.message import Message
 from pathlib import Path
 
 import pytest
@@ -8,6 +12,7 @@ import yaml
 from bktools.pipelinegen import (
     ManifestBuilderConfig,
     PipelineConfig,
+    container_image_exists,
     diffcomment_pipeline_yaml,
     main,
     manifest_builder_pipeline_yaml,
@@ -383,6 +388,98 @@ def test_pipeline_yaml_with_relcoord_endpoint_notifies_after_docker_publish() ->
     assert manifest_command_index < step["commands"].index(step["commands"][-1])
 
 
+def test_existing_container_image_goes_directly_to_relcoord() -> None:
+    pipeline = pipeline_yaml(
+        "0.1.0-deadbeef",
+        image_repo="repo.noa.re/example-app",
+        variant="uv",
+        output="container",
+        should_publish=True,
+        relcoord_endpoint="relcoord.example.com",
+        image_exists=True,
+    )
+
+    assert yaml.safe_load(pipeline)["steps"] == [
+        {
+            "label": ":pipeline: Notify relcoord",
+            "command": (
+                "uvx --from bktools --index https://repo.noa.re notify-relcoord "
+                "relcoord.example.com --repo repo.noa.re/example-app "
+                "--tag 0.1.0-deadbeef"
+            ),
+            "agents": {"speed": "fast"},
+        }
+    ]
+
+
+def test_existing_container_image_without_relcoord_has_no_steps() -> None:
+    assert (
+        pipeline_yaml(
+            "0.1.0-deadbeef",
+            image_repo="repo.noa.re/example-app",
+            variant="rust",
+            output="container",
+            should_publish=True,
+            image_exists=True,
+        )
+        == "steps: []\n"
+    )
+
+
+def test_container_image_exists_checks_registry_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("subprocess.check_output", lambda args, text: "oidc-token\n")
+    requests = []
+
+    class FakeResponse:
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+    def fake_urlopen(request: urllib.request.Request, timeout: int) -> FakeResponse:
+        requests.append((request, timeout))
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    assert container_image_exists("repo.noa.re/example-app", "0.1.0-deadbeef")
+    request, timeout = requests[0]
+    assert request.get_method() == "HEAD"
+    assert request.full_url == (
+        "https://repo.noa.re/v2/example-app/manifests/0.1.0-deadbeef"
+    )
+    assert request.get_header("Authorization") == (
+        "Basic " + base64.b64encode(b"token:oidc-token").decode()
+    )
+    assert "application/vnd.oci.image.index.v1+json" in request.get_header("Accept")
+    assert timeout == 30
+
+
+def test_container_image_exists_only_treats_404_as_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("subprocess.check_output", lambda args, text: "oidc-token")
+
+    def reject(request: urllib.request.Request, timeout: int) -> None:
+        raise urllib.error.HTTPError(request.full_url, 404, "missing", Message(), None)
+
+    monkeypatch.setattr("urllib.request.urlopen", reject)
+    assert not container_image_exists("repo.noa.re/example-app", "0.1.0-deadbeef")
+
+    def unauthorized(request: urllib.request.Request, timeout: int) -> None:
+        raise urllib.error.HTTPError(
+            request.full_url, 401, "unauthorized", Message(), None
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", unauthorized)
+    with pytest.raises(urllib.error.HTTPError) as error:
+        container_image_exists("repo.noa.re/example-app", "0.1.0-deadbeef")
+    assert error.value.code == 401
+
+
 def test_read_config_accepts_manifest_builder_repo(tmp_path: Path) -> None:
     config_path = tmp_path / "pipelinegen.toml"
     config_path.write_text(
@@ -483,6 +580,9 @@ def test_main_uses_uv_container_output_and_logs_docker_target(
         "bktools.pipelinegen.package_name",
         lambda repo_root: "example-app",
     )
+    monkeypatch.setattr(
+        "bktools.pipelinegen.container_image_exists", lambda repo, tag: False
+    )
 
     main()
 
@@ -500,6 +600,43 @@ def test_main_uses_uv_container_output_and_logs_docker_target(
         "0.1.0-deadbeef"
     )
     assert "building on main branch, uploading to example-app" in captured.err
+
+
+def test_main_skips_build_and_notifies_relcoord_for_existing_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_dir = tmp_path / ".buildkite"
+    config_dir.mkdir()
+    (config_dir / "pipelinegen.toml").write_text(
+        'variant = "uv"\noutput = "container"\n'
+        'relcoord-endpoint = "relcoord.example.com"\n'
+    )
+    monkeypatch.setattr(
+        "sys.argv", ["pipelinegen", "--dump", "--repo-root", str(tmp_path)]
+    )
+    monkeypatch.setenv("BUILDKITE_BRANCH", "main")
+    monkeypatch.setattr(
+        "bktools.pipelinegen.docker_image_tag", lambda repo_root: "0.1.0-deadbeef"
+    )
+    monkeypatch.setattr(
+        "bktools.pipelinegen.package_name", lambda repo_root: "example-app"
+    )
+    checked = []
+
+    def image_exists(repo: str, tag: str) -> bool:
+        checked.append((repo, tag))
+        return True
+
+    monkeypatch.setattr("bktools.pipelinegen.container_image_exists", image_exists)
+
+    main()
+
+    captured = capsys.readouterr()
+    assert checked == [("repo.noa.re/example-app", "0.1.0-deadbeef")]
+    assert len(yaml.safe_load(captured.out)["steps"]) == 1
+    assert "notify-relcoord relcoord.example.com" in captured.out
+    assert "docker buildx" not in captured.out
+    assert "uv run pytest" not in captured.out
 
 
 def test_main_passes_manifest_builder_repo(

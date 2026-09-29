@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import logging
 import os
 import re
@@ -8,6 +9,9 @@ import shlex
 import subprocess
 import sys
 import tomllib
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -310,6 +314,49 @@ def container_image_repo(repo_suffix: str) -> str:
     return f"{CONTAINER_REGISTRY}/{repo_suffix}"
 
 
+def container_image_exists(image_repo: str, tag: str) -> bool:
+    registry, repository = image_repo.split("/", 1)
+    token = subprocess.check_output(
+        ["buildkite-agent", "oidc", "request-token", "--audience", registry],
+        text=True,
+    ).strip()
+    credentials = base64.b64encode(f"token:{token}".encode()).decode()
+    request = urllib.request.Request(
+        f"https://{registry}/v2/{repository}/manifests/{urllib.parse.quote(tag, safe='')}",
+        method="HEAD",
+        headers={
+            "Authorization": f"Basic {credentials}",
+            "Accept": (
+                "application/vnd.oci.image.index.v1+json, "
+                "application/vnd.oci.image.manifest.v1+json, "
+                "application/vnd.docker.distribution.manifest.list.v2+json, "
+                "application/vnd.docker.distribution.manifest.v2+json"
+            ),
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30):
+            return True
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return False
+        raise
+
+
+def existing_image_pipeline_yaml(
+    image_repo: str, tag: str, relcoord_endpoint: str | None
+) -> str:
+    if relcoord_endpoint is None:
+        return EMPTY_PIPELINE_YAML
+    command = (
+        f"{NOTIFY_RELCOORD_COMMAND} {shlex.quote(relcoord_endpoint)} "
+        f"--repo {shlex.quote(image_repo)} --tag {shlex.quote(tag)}"
+    )
+    return render_pipeline_yaml(
+        {"steps": [{"label": ":pipeline: Notify relcoord", "command": command}]}
+    )
+
+
 def rust_pipeline_yaml(
     tag: str | None = None,
     *,
@@ -502,10 +549,16 @@ def pipeline_yaml(
     manifest_builder: ManifestBuilderConfig | None = None,
     relcoord_endpoint: str | None = None,
     is_pull_request: bool = False,
+    image_exists: bool = False,
 ) -> str:
     if variant == "rust-container":
         variant = "rust"
         output = "container"
+
+    if output == "container" and should_publish and image_exists:
+        if tag is None or image_repo is None:
+            raise ValueError("tag and image_repo are required for container output")
+        return existing_image_pipeline_yaml(image_repo, tag, relcoord_endpoint)
 
     if variant == "rust":
         return rust_pipeline_yaml(
@@ -613,17 +666,26 @@ def main() -> None:
     should_publish = os.getenv("BUILDKITE_BRANCH") == "main"
     tag = None
     image_repo = None
+    image_exists = False
     upload_target = PYTHON_PACKAGE_REGISTRY
     if config.output == "container":
         tag = docker_image_tag(repo_root)
         repo_suffix = package_name(repo_root)
         image_repo = container_image_repo(repo_suffix)
         upload_target = repo_suffix
+        if should_publish:
+            image_exists = container_image_exists(image_repo, tag)
+            if image_exists:
+                logger.info(
+                    "container image %s already exists",
+                    container_image(image_repo, tag),
+                )
 
     branch = os.getenv("BUILDKITE_BRANCH", "")
     if config.variant not in ("manifest-builder", "relcoord"):
         if should_publish:
-            logger.info("building on main branch, uploading to %s", upload_target)
+            if not image_exists:
+                logger.info("building on main branch, uploading to %s", upload_target)
         elif branch:
             logger.info("building on %s branch, not uploading", branch)
         else:
@@ -638,6 +700,7 @@ def main() -> None:
         manifest_builder=config.manifest_builder,
         relcoord_endpoint=config.relcoord_endpoint,
         is_pull_request=is_pull_request_build(),
+        image_exists=image_exists,
     )
     if args.dump:
         sys.stdout.write(yaml)
