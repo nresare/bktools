@@ -45,7 +45,10 @@ uv run pytest
     ```
   - `output = "container"`: add a main-branch Docker publish step using
     OIDC registry login and `docker buildx build` with zstd-compressed image
-    output.
+    output. Before adding build steps, check whether the exact image tag already
+    exists in the registry. If it does, skip the build and call the configured
+    relcoord endpoint directly with the current config; without an endpoint,
+    no additional steps are needed.
   - `relcoord-endpoint = "relcoord.example.com"`: after a container image is
     built and pushed, call
     `uvx --from bktools --index https://repo.noa.re notify-relcoord relcoord.example.com --repo ... --tag ...`.
