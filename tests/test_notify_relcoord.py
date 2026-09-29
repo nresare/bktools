@@ -137,22 +137,19 @@ def test_event_stream_prints_each_result_as_it_arrives(
         yield b": keep-alive\n"
         yield b"\n"
         yield b"event: accepted\r\n"
-        yield b'data: {"commit":"deadbeef"}\r\n'
+        yield b'data: {"commit":"deadbeef","message":"request accepted"}\r\n'
         yield b"\r\n"
         yield b"event: progress\n"
         yield b'data: {"phase":"generate",\n'
         yield b'data: "message":"generated files"}\n'
         yield b"\n"
-        assert capsys.readouterr().out == (
-            'accepted: {"commit":"deadbeef"}\n'
-            'progress: {"phase":"generate",\n"message":"generated files"}\n'
-        )
+        assert capsys.readouterr().out == "request accepted\ngenerated files\n"
         yield b"event: complete\n"
-        yield b'data: {"processed":true}\n'
+        yield b'data: {"processed":true,"message":"done"}\n'
         yield b"\n"
 
     print_event_stream(lines())
-    assert capsys.readouterr().out == 'complete: {"processed":true}\n'
+    assert capsys.readouterr().out == "done\n"
 
 
 def test_event_stream_error_fails_request(
@@ -166,7 +163,26 @@ def test_event_stream_error_fails_request(
                 b"\n",
             ]
         )
-    assert '"message":"clone failed"' in capsys.readouterr().out
+    assert capsys.readouterr().out == "clone failed\n"
+
+
+def test_event_stream_skips_updates_without_message(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    print_event_stream(
+        [
+            b"event: accepted\n",
+            b'data: {"commit":"deadbeef"}\n',
+            b"\n",
+            b"event: progress\n",
+            b'data: {"message":42}\n',
+            b"\n",
+            b"event: complete\n",
+            b'data: {"message":"done"}\n',
+            b"\n",
+        ]
+    )
+    assert capsys.readouterr().out == "done\n"
 
 
 def test_post_change_reports_relcoord_error_response(
@@ -342,10 +358,10 @@ def test_main_sends_system_request(
 
         def __iter__(self):
             yield b"event: accepted\n"
-            yield b'data: {"commit":"deadbeef"}\n'
+            yield b'data: {"commit":"deadbeef","message":"request accepted"}\n'
             yield b"\n"
             yield b"event: complete\n"
-            yield b'data: {"processed":true}\n'
+            yield b'data: {"processed":true,"message":"done"}\n'
             yield b"\n"
 
     def fake_urlopen(request: urllib.request.Request) -> FakeResponse:
@@ -367,8 +383,9 @@ def test_main_sends_system_request(
         "system": True,
         **({"pull_request": pull_request} if pull_request is not None else {}),
     }
-    assert 'accepted: {"commit":"deadbeef"}' in result.output
-    assert 'complete: {"processed":true}' in result.output
+    assert "request accepted\n" in result.output
+    assert "done\n" in result.output
+    assert '"commit":"deadbeef"' not in result.output
 
 
 def test_system_diffcomment_requires_pull_request(
