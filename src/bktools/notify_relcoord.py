@@ -194,7 +194,12 @@ def print_event_stream(lines: Iterable[bytes]) -> None:
         if not line:
             if event is not None and data:
                 payload = "\n".join(data)
-                click.echo(f"{event}: {payload}")
+                try:
+                    status = json.loads(payload)
+                except json.JSONDecodeError:
+                    status = None
+                if isinstance(status, dict) and isinstance(status.get("message"), str):
+                    click.echo(status["message"])
                 if event == "error":
                     raise click.ClickException("relcoord request failed")
                 if event == "complete":
