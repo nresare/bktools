@@ -690,6 +690,12 @@ def main() -> None:
         default=None,
         help="Repository root containing .buildkite/pipelinegen.toml. Defaults to the current git work tree.",
     )
+    parser.add_argument(
+        "--assume-image-exists",
+        choices=("true", "false"),
+        default=None,
+        help="Skip the container registry check and assume the image exists (true) or needs building (false).",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -714,7 +720,11 @@ def main() -> None:
         image_repo = container_image_repo(repo_suffix)
         upload_target = repo_suffix
         if should_publish:
-            image_exists = container_image_exists(image_repo, tag)
+            image_exists = (
+                container_image_exists(image_repo, tag)
+                if args.assume_image_exists is None
+                else args.assume_image_exists == "true"
+            )
             if image_exists:
                 logger.info(
                     "container image %s already exists",
