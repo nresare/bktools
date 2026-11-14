@@ -62,6 +62,7 @@ class PipelineConfig:
     output: PipelineOutput = None
     manifest_builder: ManifestBuilderConfig | None = None
     relcoord_endpoint: str | None = None
+    container_architecture: str | None = None
 
 
 def read_config(config_path: Path) -> PipelineConfig:
@@ -99,6 +100,16 @@ def read_config(config_path: Path) -> PipelineConfig:
             f"expected one of: {valid_outputs}"
         )
 
+    container_architecture = config.get("container-architecture")
+    if container_architecture is not None and (
+        not isinstance(container_architecture, str)
+        or container_architecture not in BUILD_ARCHES
+    ):
+        raise SystemExit(
+            f"pipelinegen config {config_path} key 'container-architecture' "
+            f"must be one of: {', '.join(BUILD_ARCHES)}"
+        )
+
     relcoord_endpoint = read_relcoord_endpoint(config, config_path)
 
     if variant == "rust-container":
@@ -109,6 +120,7 @@ def read_config(config_path: Path) -> PipelineConfig:
         return PipelineConfig(
             variant="rust",
             output="container",
+            container_architecture=container_architecture,
             relcoord_endpoint=relcoord_endpoint,
         )
 
@@ -130,6 +142,7 @@ def read_config(config_path: Path) -> PipelineConfig:
         variant=variant,
         output=output,
         manifest_builder=manifest_builder,
+        container_architecture=container_architecture,
         relcoord_endpoint=relcoord_endpoint,
     )
 
@@ -250,12 +263,13 @@ def docker_manifest_push_step(
     image_repo: str,
     tag: str,
     *,
+    architectures: tuple[str, ...],
     relcoord_endpoint: str | None = None,
 ) -> dict[str, object]:
     image = container_image(image_repo, tag)
     sources = " ".join(
         f"{image_repo}@$$(buildkite-agent meta-data get {digest_metadata_key(arch)})"
-        for arch in BUILD_ARCHES
+        for arch in architectures
     )
     commands = [
         *registry_login_commands(),
@@ -274,9 +288,13 @@ def docker_manifest_push_step(
         )
 
     return {
-        "label": ":whale: push multi-arch docker image",
+        "label": (
+            ":whale: push multi-arch docker image"
+            if len(architectures) > 1
+            else f":whale: push docker image ({architectures[0]})"
+        ),
         "key": "docker-manifest",
-        "depends_on": [build_step_key(arch) for arch in BUILD_ARCHES],
+        "depends_on": [build_step_key(arch) for arch in architectures],
         "commands": commands,
     }
 
@@ -286,14 +304,23 @@ def docker_image_publish_steps(
     tag: str,
     depends_on: str,
     *,
+    container_architecture: str | None = None,
     relcoord_endpoint: str | None = None,
 ) -> list[dict[str, object]]:
+    architectures = (
+        (container_architecture,) if container_architecture else BUILD_ARCHES
+    )
     steps: list[dict[str, object]] = [
         docker_image_build_step(image_repo, depends_on, arch=arch)
-        for arch in BUILD_ARCHES
+        for arch in architectures
     ]
     steps.append(
-        docker_manifest_push_step(image_repo, tag, relcoord_endpoint=relcoord_endpoint)
+        docker_manifest_push_step(
+            image_repo,
+            tag,
+            architectures=architectures,
+            relcoord_endpoint=relcoord_endpoint,
+        )
     )
     return steps
 
@@ -364,6 +391,7 @@ def rust_pipeline_yaml(
     output: PipelineOutput = None,
     should_publish: bool = False,
     relcoord_endpoint: str | None = None,
+    container_architecture: str | None = None,
 ) -> str:
     steps: list[dict[str, object]] = [
         {
@@ -385,7 +413,11 @@ def rust_pipeline_yaml(
             raise ValueError("image_repo is required for container output")
         steps.extend(
             docker_image_publish_steps(
-                image_repo, tag, "test", relcoord_endpoint=relcoord_endpoint
+                image_repo,
+                tag,
+                "test",
+                container_architecture=container_architecture,
+                relcoord_endpoint=relcoord_endpoint,
             )
         )
 
@@ -421,6 +453,7 @@ def uv_pipeline_yaml(
     output: PipelineOutput = None,
     should_publish: bool = False,
     relcoord_endpoint: str | None = None,
+    container_architecture: str | None = None,
 ) -> str:
     steps = [uv_test_and_build_step(should_publish and output != "container")]
     if output == "container" and should_publish:
@@ -430,7 +463,11 @@ def uv_pipeline_yaml(
             raise ValueError("image_repo is required for container output")
         steps.extend(
             docker_image_publish_steps(
-                image_repo, tag, "test-and-build", relcoord_endpoint=relcoord_endpoint
+                image_repo,
+                tag,
+                "test-and-build",
+                container_architecture=container_architecture,
+                relcoord_endpoint=relcoord_endpoint,
             )
         )
     return render_pipeline_yaml({"steps": steps})
@@ -550,6 +587,7 @@ def pipeline_yaml(
     relcoord_endpoint: str | None = None,
     is_pull_request: bool = False,
     image_exists: bool = False,
+    container_architecture: str | None = None,
 ) -> str:
     if variant == "rust-container":
         variant = "rust"
@@ -566,6 +604,7 @@ def pipeline_yaml(
             image_repo=image_repo,
             output=output,
             should_publish=should_publish,
+            container_architecture=container_architecture,
             relcoord_endpoint=relcoord_endpoint,
         )
 
@@ -575,6 +614,7 @@ def pipeline_yaml(
             image_repo=image_repo,
             output=output,
             should_publish=should_publish,
+            container_architecture=container_architecture,
             relcoord_endpoint=relcoord_endpoint,
         )
 
@@ -696,6 +736,7 @@ def main() -> None:
         image_repo=image_repo,
         variant=config.variant,
         output=config.output,
+        container_architecture=config.container_architecture,
         should_publish=should_publish,
         manifest_builder=config.manifest_builder,
         relcoord_endpoint=config.relcoord_endpoint,

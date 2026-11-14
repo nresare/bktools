@@ -179,6 +179,40 @@ def test_uv_pipeline_with_container_output_uses_uv_steps_and_docker_publish() ->
     assert "publish-to-packages" not in pipeline
 
 
+@pytest.mark.parametrize("architecture", ["amd64", "arm64"])
+@pytest.mark.parametrize("variant", ["rust", "uv", "rust-container"])
+def test_container_output_builds_only_selected_architecture(
+    architecture: str, variant: str
+) -> None:
+    pipeline = pipeline_yaml(
+        "0.1.0-deadbeef",
+        image_repo="repo.noa.re/example-app",
+        variant=variant,
+        output="container",
+        should_publish=True,
+        container_architecture=architecture,
+        relcoord_endpoint="relcoord.example.com",
+    )
+    steps = yaml.safe_load(pipeline)["steps"]
+    assert len(steps) == 3
+    build, manifest = steps[1:]
+    assert build["key"] == f"docker-build-{architecture}"
+    assert f"--platform linux/{architecture}" in build["commands"][2]
+    assert build["agents"] == (
+        {"arch": "arm64"}
+        if architecture == "arm64"
+        else {"arch": "amd64", "speed": "fast"}
+    )
+    assert manifest["depends_on"] == [f"docker-build-{architecture}"]
+    assert manifest["commands"][2] == (
+        "docker buildx imagetools create -t repo.noa.re/example-app:0.1.0-deadbeef "
+        f"repo.noa.re/example-app@$$(buildkite-agent meta-data get digest-{architecture})"
+    )
+    assert "notify-relcoord relcoord.example.com" in manifest["commands"][-1]
+    other_architecture = "arm64" if architecture == "amd64" else "amd64"
+    assert other_architecture not in pipeline
+
+
 def test_uv_pipeline_with_container_output_without_publish_has_no_publish_step() -> (
     None
 ):
@@ -316,6 +350,40 @@ def test_read_config_loads_variant_and_output_from_config(tmp_path: Path) -> Non
     config_path.write_text('variant = "uv"\noutput = "container"\n')
 
     assert read_config(config_path) == PipelineConfig(variant="uv", output="container")
+
+
+@pytest.mark.parametrize("architecture", ["amd64", "arm64"])
+@pytest.mark.parametrize("variant", ["rust", "uv", "rust-container"])
+def test_read_config_loads_container_architecture(
+    tmp_path: Path, architecture: str, variant: str
+) -> None:
+    config_path = tmp_path / "pipelinegen.toml"
+    config_path.write_text(
+        f'variant = "{variant}"\n'
+        'output = "container"\n'
+        f'container-architecture = "{architecture}"\n'
+    )
+
+    assert read_config(config_path) == PipelineConfig(
+        variant="rust" if variant == "rust-container" else variant,
+        output="container",
+        container_architecture=architecture,
+    )
+
+
+@pytest.mark.parametrize(
+    "value", ['""', '"x86_64"', '"amd64,arm64"', "42", "true", '["arm64"]']
+)
+def test_read_config_rejects_invalid_container_architecture(
+    tmp_path: Path, value: str
+) -> None:
+    config_path = tmp_path / "pipelinegen.toml"
+    config_path.write_text(f'variant = "uv"\ncontainer-architecture = {value}\n')
+
+    with pytest.raises(
+        SystemExit, match="'container-architecture' must be one of: amd64, arm64"
+    ):
+        read_config(config_path)
 
 
 def test_read_config_loads_relcoord_endpoint(tmp_path: Path) -> None:
@@ -560,13 +628,18 @@ def test_main_uses_config_variant_and_logs_publish_target(
     assert "building on main branch, uploading to nresare/python" in captured.err
 
 
+@pytest.mark.parametrize("architecture", [None, "amd64", "arm64"])
 def test_main_uses_uv_container_output_and_logs_docker_target(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    architecture: str | None,
 ) -> None:
     config_dir = tmp_path / ".buildkite"
     config_dir.mkdir()
     (config_dir / "pipelinegen.toml").write_text(
         'variant = "uv"\noutput = "container"\n'
+        + (f'container-architecture = "{architecture}"\n' if architecture else "")
     )
     monkeypatch.setattr(
         "sys.argv", ["pipelinegen", "--dump", "--repo-root", str(tmp_path)]
@@ -590,15 +663,16 @@ def test_main_uses_uv_container_output_and_logs_docker_target(
     parsed = yaml.safe_load(captured.out)
 
     assert "uv run pytest" in captured.out
-    assert_docker_buildx_publish_command(
-        parsed["steps"][1]["commands"], "repo.noa.re/example-app"
-    )
-    assert_docker_buildx_publish_command(
-        parsed["steps"][2]["commands"], "repo.noa.re/example-app"
-    )
-    assert parsed["steps"][3]["commands"][2] == expected_imagetools_command(
-        "0.1.0-deadbeef"
-    )
+    architectures = [architecture] if architecture else ["amd64", "arm64"]
+    assert len(parsed["steps"]) == len(architectures) + 2
+    for arch, step in zip(architectures, parsed["steps"][1:-1], strict=True):
+        assert step["key"] == f"docker-build-{arch}"
+        assert_docker_buildx_publish_command(
+            step["commands"], "repo.noa.re/example-app"
+        )
+    assert parsed["steps"][-1]["depends_on"] == [
+        f"docker-build-{arch}" for arch in architectures
+    ]
     assert "building on main branch, uploading to example-app" in captured.err
 
 
