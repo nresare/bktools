@@ -53,7 +53,8 @@ uv run pytest
     relcoord endpoint directly with the current config; without an endpoint,
     no additional steps are needed.
   - `container-architecture = "arm64"`: build and publish only the selected
-    container architecture (`arm64` or `amd64`). When omitted, build both.
+    container architecture (`arm64` or `amd64`) and push the tagged image directly
+    from the build step. When omitted, build both and publish a combined manifest.
   - `relcoord-endpoint = "relcoord.example.com"`: after a container image is
     built and pushed, call
     `uvx --from bktools --index https://repo.noa.re notify-relcoord relcoord.example.com --repo ... --tag ...`.

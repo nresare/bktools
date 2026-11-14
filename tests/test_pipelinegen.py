@@ -181,8 +181,9 @@ def test_uv_pipeline_with_container_output_uses_uv_steps_and_docker_publish() ->
 
 @pytest.mark.parametrize("architecture", ["amd64", "arm64"])
 @pytest.mark.parametrize("variant", ["rust", "uv", "rust-container"])
+@pytest.mark.parametrize("notify_relcoord", [True, False])
 def test_container_output_builds_only_selected_architecture(
-    architecture: str, variant: str
+    architecture: str, variant: str, notify_relcoord: bool
 ) -> None:
     pipeline = pipeline_yaml(
         "0.1.0-deadbeef",
@@ -191,11 +192,11 @@ def test_container_output_builds_only_selected_architecture(
         output="container",
         should_publish=True,
         container_architecture=architecture,
-        relcoord_endpoint="relcoord.example.com",
+        relcoord_endpoint="relcoord.example.com" if notify_relcoord else None,
     )
     steps = yaml.safe_load(pipeline)["steps"]
-    assert len(steps) == 3
-    build, manifest = steps[1:]
+    assert len(steps) == 2
+    build = steps[1]
     assert build["key"] == f"docker-build-{architecture}"
     assert f"--platform linux/{architecture}" in build["commands"][2]
     assert build["agents"] == (
@@ -203,12 +204,24 @@ def test_container_output_builds_only_selected_architecture(
         if architecture == "arm64"
         else {"arch": "amd64", "speed": "fast"}
     )
-    assert manifest["depends_on"] == [f"docker-build-{architecture}"]
-    assert manifest["commands"][2] == (
-        "docker buildx imagetools create -t repo.noa.re/example-app:0.1.0-deadbeef "
-        f"repo.noa.re/example-app@$$(buildkite-agent meta-data get digest-{architecture})"
+    assert build["depends_on"] == ("test-and-build" if variant == "uv" else "test")
+    assert build["commands"][2] == (
+        f"docker buildx build --progress=plain . --platform linux/{architecture} "
+        "--output type=image,name=repo.noa.re/example-app:0.1.0-deadbeef,"
+        "push=true,compression=zstd"
     )
-    assert "notify-relcoord relcoord.example.com" in manifest["commands"][-1]
+    assert len(build["commands"]) == (4 if notify_relcoord else 3)
+    if notify_relcoord:
+        assert build["commands"][-1] == (
+            "uvx --from bktools --index https://repo.noa.re notify-relcoord "
+            "relcoord.example.com --repo repo.noa.re/example-app --tag 0.1.0-deadbeef"
+        )
+    assert "meta-data" not in pipeline
+    assert "buildx-metadata.json" not in pipeline
+    assert "imagetools" not in pipeline
+    assert "push-by-digest" not in pipeline
+    assert "name-canonical" not in pipeline
+    assert "docker-manifest" not in pipeline
     other_architecture = "arm64" if architecture == "amd64" else "amd64"
     assert other_architecture not in pipeline
 
@@ -664,15 +677,19 @@ def test_main_uses_uv_container_output_and_logs_docker_target(
 
     assert "uv run pytest" in captured.out
     architectures = [architecture] if architecture else ["amd64", "arm64"]
-    assert len(parsed["steps"]) == len(architectures) + 2
-    for arch, step in zip(architectures, parsed["steps"][1:-1], strict=True):
+    build_steps = parsed["steps"][1:] if architecture else parsed["steps"][1:-1]
+    assert len(parsed["steps"]) == (2 if architecture else 4)
+    for arch, step in zip(architectures, build_steps, strict=True):
         assert step["key"] == f"docker-build-{arch}"
         assert_docker_buildx_publish_command(
             step["commands"], "repo.noa.re/example-app"
         )
-    assert parsed["steps"][-1]["depends_on"] == [
-        f"docker-build-{arch}" for arch in architectures
-    ]
+    if architecture:
+        assert parsed["steps"][-1]["depends_on"] == "test-and-build"
+    else:
+        assert parsed["steps"][-1]["depends_on"] == [
+            f"docker-build-{arch}" for arch in architectures
+        ]
     assert "building on main branch, uploading to example-app" in captured.err
 
 

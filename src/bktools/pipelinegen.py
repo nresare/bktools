@@ -233,68 +233,69 @@ def registry_login_commands() -> list[str]:
 
 
 def docker_image_build_step(
-    image_repo: str,
+    image: str,
     depends_on: str,
     *,
     arch: str,
+    push_by_digest: bool,
 ) -> dict[str, object]:
+    metadata_option = (
+        f"--metadata-file {BUILDX_METADATA_FILE} " if push_by_digest else ""
+    )
+    digest_options = (
+        "push-by-digest=true,name-canonical=true," if push_by_digest else ""
+    )
+    commands = [
+        *registry_login_commands(),
+        (
+            f"docker buildx build --progress=plain . --platform linux/{arch} "
+            f"{metadata_option}"
+            f"--output type=image,name={image},{digest_options}push=true,compression=zstd"
+        ),
+    ]
+    if push_by_digest:
+        commands.append(
+            f"buildkite-agent meta-data set {digest_metadata_key(arch)} "
+            f'"$$(jq -r \'."containerimage.digest"\' {BUILDX_METADATA_FILE})"'
+        )
     return {
         "label": f":whale: build docker image ({arch})",
         "key": build_step_key(arch),
         "depends_on": depends_on,
         "agents": {"arch": arch},
-        "commands": [
-            *registry_login_commands(),
-            (
-                f"docker buildx build --progress=plain . --platform linux/{arch} "
-                f"--metadata-file {BUILDX_METADATA_FILE} "
-                f"--output type=image,name={image_repo},push-by-digest=true,"
-                "name-canonical=true,push=true,compression=zstd"
-            ),
-            (
-                f"buildkite-agent meta-data set {digest_metadata_key(arch)} "
-                f'"$$(jq -r \'."containerimage.digest"\' {BUILDX_METADATA_FILE})"'
-            ),
-        ],
+        "commands": commands,
     }
+
+
+def notify_relcoord_command(image_repo: str, tag: str, endpoint: str) -> str:
+    return (
+        f"{NOTIFY_RELCOORD_COMMAND} {shlex.quote(endpoint)} "
+        f"--repo {shlex.quote(image_repo)} --tag {shlex.quote(tag)}"
+    )
 
 
 def docker_manifest_push_step(
     image_repo: str,
     tag: str,
     *,
-    architectures: tuple[str, ...],
     relcoord_endpoint: str | None = None,
 ) -> dict[str, object]:
     image = container_image(image_repo, tag)
     sources = " ".join(
         f"{image_repo}@$$(buildkite-agent meta-data get {digest_metadata_key(arch)})"
-        for arch in architectures
+        for arch in BUILD_ARCHES
     )
     commands = [
         *registry_login_commands(),
         f"docker buildx imagetools create -t {image} {sources}",
     ]
     if relcoord_endpoint is not None:
-        commands.extend(
-            [
-                (
-                    f"{NOTIFY_RELCOORD_COMMAND} "
-                    f"{shlex.quote(relcoord_endpoint)} "
-                    f"--repo {shlex.quote(image_repo)} "
-                    f"--tag {shlex.quote(tag)}"
-                ),
-            ]
-        )
+        commands.append(notify_relcoord_command(image_repo, tag, relcoord_endpoint))
 
     return {
-        "label": (
-            ":whale: push multi-arch docker image"
-            if len(architectures) > 1
-            else f":whale: push docker image ({architectures[0]})"
-        ),
+        "label": ":whale: push multi-arch docker image",
         "key": "docker-manifest",
-        "depends_on": [build_step_key(arch) for arch in architectures],
+        "depends_on": [build_step_key(arch) for arch in BUILD_ARCHES],
         "commands": commands,
     }
 
@@ -307,20 +308,24 @@ def docker_image_publish_steps(
     container_architecture: str | None = None,
     relcoord_endpoint: str | None = None,
 ) -> list[dict[str, object]]:
-    architectures = (
-        (container_architecture,) if container_architecture else BUILD_ARCHES
-    )
-    steps: list[dict[str, object]] = [
-        docker_image_build_step(image_repo, depends_on, arch=arch)
-        for arch in architectures
+    if container_architecture is not None:
+        step = docker_image_build_step(
+            container_image(image_repo, tag),
+            depends_on,
+            arch=container_architecture,
+            push_by_digest=False,
+        )
+        if relcoord_endpoint is not None:
+            commands = cast(list[str], step["commands"])
+            commands.append(notify_relcoord_command(image_repo, tag, relcoord_endpoint))
+        return [step]
+
+    steps = [
+        docker_image_build_step(image_repo, depends_on, arch=arch, push_by_digest=True)
+        for arch in BUILD_ARCHES
     ]
     steps.append(
-        docker_manifest_push_step(
-            image_repo,
-            tag,
-            architectures=architectures,
-            relcoord_endpoint=relcoord_endpoint,
-        )
+        docker_manifest_push_step(image_repo, tag, relcoord_endpoint=relcoord_endpoint)
     )
     return steps
 
@@ -375,10 +380,7 @@ def existing_image_pipeline_yaml(
 ) -> str:
     if relcoord_endpoint is None:
         return EMPTY_PIPELINE_YAML
-    command = (
-        f"{NOTIFY_RELCOORD_COMMAND} {shlex.quote(relcoord_endpoint)} "
-        f"--repo {shlex.quote(image_repo)} --tag {shlex.quote(tag)}"
-    )
+    command = notify_relcoord_command(image_repo, tag, relcoord_endpoint)
     return render_pipeline_yaml(
         {"steps": [{"label": ":pipeline: Notify relcoord", "command": command}]}
     )
