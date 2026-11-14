@@ -713,6 +713,74 @@ def test_main_skips_build_and_notifies_relcoord_for_existing_image(
     assert "uv run pytest" not in captured.out
 
 
+@pytest.mark.parametrize("assumption", ["true", "false"])
+@pytest.mark.parametrize("notify_relcoord", [True, False])
+def test_main_assumes_image_exists_without_checking_registry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    assumption: str,
+    notify_relcoord: bool,
+) -> None:
+    config_dir = tmp_path / ".buildkite"
+    config_dir.mkdir()
+    (config_dir / "pipelinegen.toml").write_text(
+        'variant = "uv"\noutput = "container"\n'
+        + ('relcoord-endpoint = "relcoord.example.com"\n' if notify_relcoord else "")
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pipelinegen",
+            "--dump",
+            "--repo-root",
+            str(tmp_path),
+            f"--assume-image-exists={assumption}",
+        ],
+    )
+    monkeypatch.setenv("BUILDKITE_BRANCH", "main")
+    monkeypatch.setattr(
+        "bktools.pipelinegen.docker_image_tag", lambda repo_root: "0.1.0-deadbeef"
+    )
+    monkeypatch.setattr(
+        "bktools.pipelinegen.package_name", lambda repo_root: "example-app"
+    )
+
+    def unexpected_registry_check(repo: str, tag: str) -> bool:
+        pytest.fail("Registry check must be bypassed when --assume-image-exists is set")
+
+    monkeypatch.setattr(
+        "bktools.pipelinegen.container_image_exists", unexpected_registry_check
+    )
+
+    main()
+
+    pipeline = capsys.readouterr().out
+    if assumption == "false":
+        assert_docker_publish_step(pipeline, depends_on="test-and-build")
+    elif notify_relcoord:
+        assert len(yaml.safe_load(pipeline)["steps"]) == 1
+        assert "notify-relcoord relcoord.example.com" in pipeline
+        assert "docker buildx" not in pipeline
+    else:
+        assert pipeline == "steps: []\n"
+
+
+@pytest.mark.parametrize("value", ["yes", "1", "False", ""])
+def test_main_rejects_invalid_image_exists_assumption(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    value: str,
+) -> None:
+    monkeypatch.setattr("sys.argv", ["pipelinegen", f"--assume-image-exists={value}"])
+
+    with pytest.raises(SystemExit) as error:
+        main()
+
+    assert error.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
+
+
 def test_main_passes_manifest_builder_repo(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

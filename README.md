@@ -19,7 +19,10 @@ uv run pytest
 - `pipelinegen`: generate Buildkite pipeline YAML from `.buildkite/pipelinegen.toml`,
   write it to `pipeline.yaml`, upload that file as a Buildkite artifact, and
   upload it with `buildkite-agent pipeline upload`. Use `--dump` to write the
-  generated YAML to stdout instead.
+  generated YAML to stdout instead. To preview container publishing locally, run
+  `BUILDKITE_BRANCH=main pipelinegen --dump --assume-image-exists=false`.
+  `--assume-image-exists=true|false` bypasses the registry check: `false`
+  generates the build steps, while `true` takes the existing-image path.
   - `variant = "rust"`: Rust build/test.
   - `variant = "uv"`: uv/ruff/pytest/build/ty checks plus a main-branch Python
     package publish step.
