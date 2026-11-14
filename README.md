@@ -49,6 +49,8 @@ uv run pytest
     exists in the registry. If it does, skip the build and call the configured
     relcoord endpoint directly with the current config; without an endpoint,
     no additional steps are needed.
+  - `container-architecture = "arm64"`: build and publish only the selected
+    container architecture (`arm64` or `amd64`). When omitted, build both.
   - `relcoord-endpoint = "relcoord.example.com"`: after a container image is
     built and pushed, call
     `uvx --from bktools --index https://repo.noa.re notify-relcoord relcoord.example.com --repo ... --tag ...`.
